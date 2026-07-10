@@ -138,7 +138,7 @@ COLS_UTILES = [
 
 # API publiques utilisées pour l'enrichissement par adresse
 BAN_API_URL = "https://api-adresse.data.gouv.fr/search/"
-ADEME_DPE_API_URL = "https://data.ademe.fr/data-fair/api/v1/datasets/dpe-v2-logements-existants/lines"
+ADEME_DPE_API_URL = "https://data.ademe.fr/data-fair/api/v1/datasets/dpe03existant/lines"
 IGN_CADASTRE_URL = "https://apicarto.ign.fr/api/cadastre/parcelle"
 IGN_GPU_ZONE_URBA_URL = "https://apicarto.ign.fr/api/gpu/zone-urba"
 GEORISQUES_API_URL = "https://georisques.gouv.fr/api/v1/resultats_rapport_risque"
@@ -506,7 +506,7 @@ def find_dpe(address: str, code_postal: str | None = None, max_results: int = 5)
     NB : le nom exact du jeu de données / des champs sur l'API data-fair de
     l'ADEME évolue de temps en temps. Si cette fonction ne retourne rien
     alors qu'un DPE existe, vérifiez le nom du dataset et des champs sur
-    https://data.ademe.fr/datasets/dpe-v2-logements-existants (bouton API).
+    https://data.ademe.fr/datasets/dpe03existant (bouton API).
     """
     import requests
     query = address.strip()
