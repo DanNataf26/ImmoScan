@@ -498,15 +498,21 @@ def find_dpe(address: str, code_postal: str | None = None, max_results: int = 5)
     par texte libre — à vérifier manuellement en cas de doute (plusieurs
     logements peuvent partager la même adresse : copropriétés, immeubles).
 
+    IMPORTANT : ce jeu de données ne couvre que les DPE établis à partir du
+    1er juillet 2021 (réforme du DPE). Un bien dont le dernier diagnostic est
+    antérieur à cette date n'y figurera pas — ce n'est pas un défaut de cette
+    fonction, l'ADEME publie ces DPE plus anciens dans un jeu de données séparé.
+
     NB : le nom exact du jeu de données / des champs sur l'API data-fair de
     l'ADEME évolue de temps en temps. Si cette fonction ne retourne rien
     alors qu'un DPE existe, vérifiez le nom du dataset et des champs sur
     https://data.ademe.fr/datasets/dpe-v2-logements-existants (bouton API).
     """
     import requests
-    params = {"q": address, "size": max_results}
-    if code_postal:
-        params["qs"] = f"code_postal_ban:{code_postal}"
+    query = address.strip()
+    if code_postal and code_postal not in query:
+        query = f"{query} {code_postal}"
+    params = {"q": query, "size": max_results}
     try:
         resp = requests.get(ADEME_DPE_API_URL, params=params, timeout=10)
         resp.raise_for_status()
