@@ -498,14 +498,28 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
     )
     df["rue_norm"] = df["adresse_nom_voie"].map(_normalize_text)
 
+    # Mots de type de voie trop génériques pour servir de critère de
+    # correspondance à eux seuls (sinon "avenue X" matche n'importe quelle
+    # autre avenue partageant juste le mot "avenue").
+    MOTS_GENERIQUES = {
+        "rue", "avenue", "boulevard", "chemin", "impasse", "allee", "place",
+        "square", "route", "sentier", "quai", "cours", "villa", "cite",
+        "passage", "voie", "chaussee", "rond", "point", "cite", "residence",
+        "hameau", "faubourg", "quartier", "lotissement",
+    }
+
     target_numero, target_rue = _parse_address_number_street(address)
-    rue_tokens = [t for t in target_rue.split() if len(t) > 2]  # ignore "de", "la", etc.
+    rue_tokens = [
+        t for t in target_rue.split() if len(t) > 2 and t not in MOTS_GENERIQUES
+    ]
 
     def rue_correspond(rue_dvf: str) -> bool:
         if not rue_tokens:
             return False
-        hits = sum(1 for t in rue_tokens if t in rue_dvf)
-        return hits >= max(1, len(rue_tokens) - 1)  # tolère un mot manquant/abrégé
+        # Tous les mots distinctifs de l'adresse recherchée doivent se
+        # retrouver dans le nom de voie DVF (pas de tolérance : un seul mot
+        # manquant peut désigner une rue complètement différente).
+        return all(t in rue_dvf for t in rue_tokens)
 
     exact = df[
         (df["numero_norm"] == target_numero) & (df["rue_norm"].apply(rue_correspond))
