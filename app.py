@@ -236,6 +236,9 @@ with tab_recherche:
         active_dept = detected_dept if reference_exists(detected_dept) else dept
         active_ref, _ = load_reference(active_dept) if reference_exists(active_dept) else (None, None)
 
+        suggested_surface = None
+        suggested_type = None
+
         # --- Historique probable + comparables ---------------------------------
         if active_ref is None:
             st.info(
@@ -272,6 +275,11 @@ with tab_recherche:
                         "— vérifiez la colonne 'correspondance' et l'adresse "
                         "DVF affichée."
                     )
+                    exact_rows = history[history["correspondance"].str.startswith("Exacte")]
+                    if not exact_rows.empty:
+                        derniere = exact_rows.iloc[0]  # déjà triée par date décroissante
+                        suggested_surface = derniere.get("surface_reelle_bati")
+                        suggested_type = derniere.get("type_local")
             except SystemExit as e:
                 st.warning(str(e))
 
@@ -300,6 +308,25 @@ with tab_recherche:
             st.caption("Aucun DPE trouvé automatiquement pour cette adresse.")
         else:
             st.dataframe(dpe, use_container_width=True)
+            if suggested_surface is None:
+                # Repli sur la surface habitable du DPE si aucune vente exacte
+                # n'a été trouvée dans l'historique. Le nom du champ varie
+                # selon les versions du jeu de données ADEME — on essaie les
+                # candidats les plus courants.
+                for col in ("surface_habitable_logement", "surface_habitable",
+                            "surface_thermique_lot"):
+                    if col in dpe.columns:
+                        val = dpe.iloc[0].get(col)
+                        if pd.notna(val):
+                            suggested_surface = val
+                            break
+
+        if suggested_surface or suggested_type:
+            source = "l'historique de ce bien" if suggested_type else "le DPE de cette adresse"
+            st.caption(
+                f"💡 Surface/type trouvés via {source} : repris automatiquement "
+                "ci-dessous dans 'Scorer ce bien' (modifiable)."
+            )
 
         st.divider()
 
@@ -404,12 +431,21 @@ with tab_recherche:
             types_dispo = sorted(active_ref["type_local"].unique())
             detected_commune = geo.get("commune")
 
-            # Si l'adresse recherchée a changé, on resynchronise la commune de
-            # scoring par défaut (tout en restant modifiable ensuite).
+            # Si l'adresse recherchée a changé, on resynchronise la commune, la
+            # surface et le type de bien par défaut (tout en restant modifiable
+            # ensuite, et sans jamais écraser un choix déjà fait pour cette
+            # même adresse).
             if st.session_state.get("score_last_geo_label") != geo["label"]:
                 st.session_state["score_last_geo_label"] = geo["label"]
                 if detected_commune in communes_dispo:
                     st.session_state["score_commune"] = detected_commune
+                if suggested_type in types_dispo:
+                    st.session_state["score_type"] = suggested_type
+                if suggested_surface:
+                    try:
+                        st.session_state["score_surface"] = float(suggested_surface)
+                    except (TypeError, ValueError):
+                        pass
 
             if "score_commune" not in st.session_state:
                 st.session_state["score_commune"] = communes_dispo[0]
