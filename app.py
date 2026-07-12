@@ -18,8 +18,11 @@ import streamlit.components.v1 as components
 try:
     from st_address_search import address_search_component
     CUSTOM_SEARCH_AVAILABLE = True
-except Exception:
+    CUSTOM_SEARCH_ERROR = None
+except Exception as _e:
     CUSTOM_SEARCH_AVAILABLE = False
+    CUSTOM_SEARCH_ERROR = str(_e)
+    print(f"[warn] Composant address_search indisponible : {_e}")
 
 sys.path.insert(0, str(Path(__file__).parent))
 import immo_scan as core  # noqa: E402
@@ -170,6 +173,8 @@ with tab_recherche:
             "Le composant de suggestions automatiques n'a pas pu se charger — "
             "recherche manuelle ci-dessous en repli."
         )
+        if CUSTOM_SEARCH_ERROR:
+            st.caption(f"Détail technique : `{CUSTOM_SEARCH_ERROR}`")
 
     with st.expander(
         "🔎 Recherche manuelle (si les suggestions automatiques ne s'affichent pas)",
@@ -318,8 +323,19 @@ with tab_recherche:
             source = "l'historique de ce bien" if suggested_type else "le DPE de cette adresse"
             st.caption(
                 f"💡 Surface/type trouvés via {source} : repris automatiquement "
-                "ci-dessous dans 'Scorer ce bien' (modifiable)."
+                "ci-dessous (modifiable)."
             )
+
+        # Resynchronise les champs pré-remplissables (surface ici, et plus bas
+        # commune/type/surface du scoring) à chaque nouvelle adresse recherchée,
+        # sans jamais écraser une modification déjà faite pour cette adresse.
+        if st.session_state.get("prefill_last_geo_label") != geo["label"]:
+            st.session_state["prefill_last_geo_label"] = geo["label"]
+            if suggested_surface:
+                try:
+                    st.session_state["potentiel_surface"] = float(suggested_surface)
+                except (TypeError, ValueError):
+                    pass
 
         st.divider()
 
@@ -347,7 +363,7 @@ with tab_recherche:
         surface_connue = st.number_input(
             "Surface bâtie connue du bien (m²), si vous la connaissez — "
             "sert uniquement à estimer la réserve foncière ci-dessous",
-            min_value=0.0, value=0.0, step=5.0, key="potentiel_surface",
+            min_value=0.0, step=5.0, key="potentiel_surface",
         )
 
         if st.button("Analyser le foncier", type="primary"):
