@@ -113,18 +113,39 @@ def render_geo_views(lat: float, lon: float, radius_m: float | None = None):
         st.link_button("Ouvrir dans Google Maps", core.google_maps_url(lat, lon), use_container_width=True)
 
     with t2:
+        try:
+            import folium
+            mc = folium.Map(location=[lat, lon], zoom_start=19, tiles=None)
+            folium.TileLayer(
+                tiles=(
+                    "https://data.geopf.fr/wmts?SERVICE=WMTS&VERSION=1.0.0&REQUEST=GetTile"
+                    "&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM"
+                    "&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg"
+                ),
+                attr="IGN-F/Géoportail", name="Photos aériennes", overlay=False,
+            ).add_to(mc)
+            folium.TileLayer(
+                tiles=(
+                    "https://data.geopf.fr/wmts?SERVICE=WMTS&VERSION=1.0.0&REQUEST=GetTile"
+                    "&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=PCI vecteur"
+                    "&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png"
+                ),
+                attr="IGN-F/Géoportail — Cadastre", name="Parcelles cadastrales",
+                overlay=True, opacity=0.9,
+            ).add_to(mc)
+            folium.Marker([lat, lon], tooltip="Adresse recherchée",
+                          icon=folium.Icon(color="red", icon="home", prefix="fa")).add_to(mc)
+            components.html(mc._repr_html_(), height=440)
+            st.caption(
+                "Couche cadastrale officielle IGN sur fond de photo aérienne "
+                "(numéros de parcelle visibles en zoomant). Le rendu diffère "
+                "visuellement de cadastre.gouv.fr (dont l'intégration est "
+                "bloquée par le site lui-même), mais la donnée est la même."
+            )
+        except Exception as exc:
+            st.warning(f"Vue cadastre indisponible ({exc}).")
         cadastre_url = f"https://www.cadastre.gouv.fr/scpc/rechercherPlan.do?lat={lat}&lon={lon}"
-        components.html(
-            f'<iframe src="{cadastre_url}" width="100%" height="420" style="border:0;" loading="lazy"></iframe>',
-            height=440,
-        )
-        st.caption(
-            "Plan cadastral officiel (cadastre.gouv.fr), avec les numéros de "
-            "parcelle. Si la carte ne s'affiche pas ci-dessus (certains "
-            "navigateurs bloquent son intégration), utilisez le lien Cadastre "
-            "dans la section 'Analyser ce bien' plus bas pour l'ouvrir directement."
-        )
-        st.link_button("Ouvrir cadastre.gouv.fr dans un nouvel onglet", cadastre_url, use_container_width=True)
+        st.link_button("Ouvrir le plan cadastral officiel (cadastre.gouv.fr)", cadastre_url, use_container_width=True)
 
     with t3:
         earth = core.google_earth_url(lat, lon)
