@@ -257,8 +257,14 @@ with st.sidebar.expander("Options avancées"):
         "dans l'app."
     )
     code_insee_test = st.text_input(
-        "Code INSEE de la commune à tester", value="94021",
-        help="94021 = Chennevières-sur-Marne, à titre d'exemple.",
+        "Code INSEE de la commune à tester (⚠️ différent du code postal !)",
+        value="94021",
+        help=(
+            "Le code INSEE n'est PAS le code postal. Exemples pour le "
+            "Val-de-Marne : 94021 = Chennevières-sur-Marne (code postal "
+            "94430), 94028 = Créteil (code postal 94000), 94080 = Vincennes "
+            "(code postal 94300). Cherchez '[commune] code insee' si besoin."
+        ),
         key="cerema_api_test_insee",
     )
     if st.button("Tester l'appel en direct", key="cerema_api_test_button"):

@@ -532,7 +532,7 @@ def import_cerema_dvfplus(zip_path: str, dept: str) -> str:
     )
 
 
-def test_cerema_api_live(code_insee: str) -> dict:
+def test_cerema_api_live(code_insee: str, tentatives: int = 3) -> dict:
     """
     Teste en direct l'API DVF+ open-data du Cerema (module Python
     `apifoncier`, flux "ouvert" — documentation officielle indique qu'aucun
@@ -541,9 +541,14 @@ def test_cerema_api_live(code_insee: str) -> dict:
     Isolée dans sa propre fonction avec import différé et capture large des
     exceptions : un souci ici (paquet absent, API indisponible, changement de
     schéma...) ne doit jamais faire planter le reste de l'application.
+
+    Réessaie plusieurs fois en cas de timeout (l'API est en préproduction,
+    donc parfois lente plutôt que réellement bloquée) avant d'abandonner.
     Retourne un dict avec 'succes' (bool), 'message', et 'apercu' (DataFrame
     ou None) pour affichage direct dans l'app.
     """
+    import time
+
     try:
         import apifoncier.dvf_opendata as dvf
     except ImportError as exc:
@@ -553,29 +558,53 @@ def test_cerema_api_live(code_insee: str) -> dict:
             "apercu": None,
         }
 
-    try:
-        df = dvf.mutations(code_insee=code_insee)
-        if df is None or df.empty:
+    derniere_erreur = None
+    for tentative in range(1, tentatives + 1):
+        try:
+            df = dvf.mutations(code_insee=code_insee)
+            if df is None or df.empty:
+                return {
+                    "succes": False,
+                    "message": (
+                        f"Appel réussi (tentative {tentative}/{tentatives}) mais "
+                        f"aucune donnée retournée pour la commune {code_insee} "
+                        "(l'API a répondu sans erreur, mais avec un résultat vide)."
+                    ),
+                    "apercu": None,
+                }
             return {
-                "succes": False,
+                "succes": True,
                 "message": (
-                    f"Appel réussi mais aucune donnée retournée pour la "
-                    f"commune {code_insee} (l'API a répondu sans erreur, "
-                    "mais avec un résultat vide)."
+                    f"✅ {len(df)} mutations récupérées en direct pour la commune "
+                    f"{code_insee} (tentative {tentative}/{tentatives}), sans jeton "
+                    "ni fichier à télécharger."
                 ),
-                "apercu": None,
+                "apercu": df.head(10),
             }
-        return {
-            "succes": True,
-            "message": f"✅ {len(df)} mutations récupérées en direct pour la commune {code_insee}, sans jeton ni fichier à télécharger.",
-            "apercu": df.head(10),
-        }
-    except Exception as exc:
-        return {
-            "succes": False,
-            "message": f"Échec de l'appel à l'API Cerema : {type(exc).__name__}: {exc}",
-            "apercu": None,
-        }
+        except Exception as exc:
+            derniere_erreur = exc
+            is_timeout = "timeout" in str(exc).lower() or "timed out" in str(exc).lower()
+            if is_timeout and tentative < tentatives:
+                time.sleep(3)
+                continue
+            break
+
+    is_timeout = derniere_erreur is not None and (
+        "timeout" in str(derniere_erreur).lower() or "timed out" in str(derniere_erreur).lower()
+    )
+    if is_timeout:
+        message = (
+            f"⏱️ Délai dépassé après {tentatives} tentatives : "
+            f"{type(derniere_erreur).__name__}: {derniere_erreur}\n\n"
+            "Ce n'est PAS un refus d'accès (pas d'erreur d'authentification) — "
+            "la connexion s'établit normalement, mais le serveur (en "
+            "préproduction/bêta chez Cerema) ne répond pas assez vite. "
+            "Peut valoir le coup de réessayer plus tard ou à une autre heure."
+        )
+    else:
+        message = f"Échec de l'appel à l'API Cerema : {type(derniere_erreur).__name__}: {derniere_erreur}"
+
+    return {"succes": False, "message": message, "apercu": None}
 
 
 CEREMA_BUNDLED_DIR = Path(__file__).parent / "cerema_data"
