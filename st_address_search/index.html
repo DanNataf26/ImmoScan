@@ -46,8 +46,17 @@
   }
 
   function setFrameHeight() {
-    const height = document.documentElement.scrollHeight;
-    _sendMessage(SET_FRAME_HEIGHT, { height: height + 6 });
+    // On diffère la mesure après le rendu réel du navigateur (double
+    // requestAnimationFrame) : mesurer juste après une mutation du DOM peut
+    // donner une valeur périmée (trop grande) avant que la mise en page ne
+    // soit recalculée, ce qui laissait un espace vide résiduel après une
+    // sélection (liste de suggestions effacée mais cadre non réduit).
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const height = document.documentElement.scrollHeight;
+        _sendMessage(SET_FRAME_HEIGHT, { height: height + 6 });
+      });
+    });
   }
 
   function notifyHost(value) {
@@ -135,6 +144,7 @@
         suggestionsDiv.innerHTML = "";
         input.value = props.label;
         setFrameHeight();
+        window.setTimeout(setFrameHeight, 150);
       };
       suggestionsDiv.appendChild(div);
     });
