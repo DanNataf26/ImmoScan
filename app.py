@@ -196,9 +196,10 @@ with st.sidebar.expander("Options avancées"):
     st.markdown("**Historique complémentaire 2014-2020 (Cerema DVF+)**")
 
     regional_files = sorted(core.CEREMA_BUNDLED_DIR.glob("cerema_dvfplus_region_*.csv.gz"))
+    regional_parts = sorted(core.CEREMA_BUNDLED_DIR.glob("cerema_dvfplus_region_*.csv.gz.part*"))
     bundled_dept_exists = (core.CEREMA_BUNDLED_DIR / f"cerema_dvfplus_{dept}.csv").exists()
     uploaded_exists = (core.OUTPUT_DIR / f"cerema_dvfplus_{dept}.csv").exists()
-    bundled_exists = bool(regional_files) or bundled_dept_exists
+    bundled_exists = bool(regional_files) or bool(regional_parts) or bundled_dept_exists
 
     if bundled_exists:
         if regional_files:
@@ -208,6 +209,14 @@ with st.sidebar.expander("Options avancées"):
                 f"un fichier régional ({noms}) — couvre potentiellement "
                 "plusieurs départements, filtré automatiquement pour le "
                 f"{dept}. Survit aux redémarrages."
+            )
+        elif regional_parts:
+            nb_bases = len(set(p.name.split(".part")[0] for p in regional_parts))
+            st.success(
+                f"✅ Historique Cerema DVF+ intégré en permanence au dépôt via "
+                f"{len(regional_parts)} morceau(x) régional(aux) découpé(s) "
+                f"({nb_bases} fichier(s) recollé(s) automatiquement) — filtré "
+                f"pour le {dept}. Survit aux redémarrages."
             )
         else:
             st.success(

@@ -607,7 +607,8 @@ def import_cerema_dvfplus(zip_path: str, dept: str) -> str:
 
 def import_cerema_dvfplus_region_combined(zip_path: str, region_name: str,
                                            depts: list[str] | None = None,
-                                           progress_callback=None) -> str:
+                                           progress_callback=None,
+                                           taille_max_mo: float = 20.0) -> str:
     """
     Importe les données Cerema DVF+ pour tous les départements d'une archive
     régionale et les combine en UN SEUL fichier compressé (gzip), plutôt
@@ -616,9 +617,16 @@ def import_cerema_dvfplus_region_combined(zip_path: str, region_name: str,
     d'environ 3-4x (ex. ~122 Mo → ~36 Mo pour l'Île-de-France), sans
     dépendance supplémentaire (gzip est natif à pandas/Python).
 
-    `region_name` sert à nommer le fichier de sortie
-    (`cerema_dvfplus_region_{region_name}.csv.gz`) — utilisez un nom court
-    et stable (ex. "idf" pour Île-de-France).
+    Si le fichier compressé dépasse `taille_max_mo` (par défaut 20 Mo, avec
+    marge sous la limite de 25 Mo de l'upload web GitHub — l'envoi en ligne
+    de commande accepte jusqu'à 100 Mo, mais l'interface web mobile utilisée
+    ici est plus restrictive), il est automatiquement découpé en plusieurs
+    morceaux (`.part001`, `.part002`, ...) que l'app recolle elle-même au
+    chargement — à déposer tous ensemble dans `cerema_data/`.
+
+    `region_name` sert à nommer le(s) fichier(s) de sortie
+    (`cerema_dvfplus_region_{region_name}.csv.gz[.partNNN]`) — utilisez un
+    nom court et stable (ex. "idf" pour Île-de-France).
     """
     resultats = load_cerema_dvfplus_region(zip_path, depts, progress_callback=progress_callback)
     if not resultats:
@@ -641,13 +649,51 @@ def import_cerema_dvfplus_region_combined(zip_path: str, region_name: str,
         if not df.empty else f"  • {dept} : aucune transaction"
         for dept, df in resultats.items()
     ]
-    return (
+    resume_base = (
         f"{len(combined)} transactions Cerema DVF+ importées et combinées "
-        f"pour {len(resultats)} département(s) en un seul fichier compressé "
-        f"({taille_mo:.0f} Mo) :\n" + "\n".join(lignes_resume) +
-        f"\n\nFichier généré : output/cerema_dvfplus_region_{region_name}.csv.gz "
-        "— à déposer dans cerema_data/ pour le rendre permanent.\n"
-        "Source : Cerema, DVF+ open-data, Licence Ouverte v2.0 (Etalab)."
+        f"pour {len(resultats)} département(s) ({taille_mo:.0f} Mo) :\n"
+        + "\n".join(lignes_resume) +
+        "\n\nSource : Cerema, DVF+ open-data, Licence Ouverte v2.0 (Etalab)."
+    )
+
+    if taille_mo <= taille_max_mo:
+        return (
+            resume_base +
+            f"\n\nFichier généré : output/cerema_dvfplus_region_{region_name}.csv.gz "
+            "— à déposer dans cerema_data/ pour le rendre permanent."
+        )
+
+    # Découpage en morceaux sous taille_max_mo, pour passer sous la limite
+    # d'upload web de GitHub (25 Mo).
+    if progress_callback:
+        progress_callback(
+            f"Fichier de {taille_mo:.0f} Mo > {taille_max_mo:.0f} Mo : "
+            "découpage en morceaux..."
+        )
+    chunk_size = int(taille_max_mo * 1_000_000)
+    parts = []
+    with open(cache_path, "rb") as f:
+        idx = 1
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            part_path = OUTPUT_DIR / f"cerema_dvfplus_region_{region_name}.csv.gz.part{idx:03d}"
+            part_path.write_bytes(chunk)
+            parts.append(part_path.name)
+            idx += 1
+    cache_path.unlink()  # on retire le fichier non découpé, remplacé par les morceaux
+
+    if progress_callback:
+        progress_callback(f"✅ Découpé en {len(parts)} morceaux : {', '.join(parts)}")
+
+    return (
+        resume_base +
+        f"\n\n⚠️ Fichier découpé en {len(parts)} morceaux car il dépasse "
+        f"{taille_max_mo:.0f} Mo (limite d'upload web GitHub ≈ 25 Mo) :\n" +
+        "\n".join(f"  • output/{p}" for p in parts) +
+        "\n\nDéposez TOUS ces morceaux ensemble dans cerema_data/ — l'app "
+        "les recolle elle-même automatiquement au chargement."
     )
 
 
@@ -674,7 +720,10 @@ def load_cerema_cache(dept: str) -> pd.DataFrame | None:
     ordre :
     1. Un fichier régional intégré au dépôt (`cerema_data/cerema_dvfplus_region_*.csv.gz`,
        compressé, couvrant plusieurs départements — recommandé pour limiter
-       le nombre de fichiers) — filtré au département demandé.
+       le nombre de fichiers) — filtré au département demandé. Si ce
+       fichier a été découpé en morceaux (`.part001`, `.part002`, ... — cas
+       des fichiers dépassant la limite d'upload web GitHub de 25 Mo), les
+       morceaux sont recollés automatiquement avant lecture.
     2. Un fichier par département intégré au dépôt
        (`cerema_data/cerema_dvfplus_{dept}.csv`, non compressé).
     3. À défaut, le cache généré par un import manuel via l'upload dans
@@ -685,6 +734,27 @@ def load_cerema_cache(dept: str) -> pd.DataFrame | None:
     """
     for regional_path in sorted(CEREMA_BUNDLED_DIR.glob("cerema_dvfplus_region_*.csv.gz")):
         df_region = _load_regional_file_cached(regional_path)
+        df_dept = df_region[df_region["code_commune"].astype(str).str.startswith(dept)]
+        if not df_dept.empty:
+            return df_dept.reset_index(drop=True)
+
+    # Fichiers régionaux découpés en morceaux (.part001, .part002, ...) :
+    # regroupés par nom de base, recollés avant lecture.
+    part_files = sorted(CEREMA_BUNDLED_DIR.glob("cerema_dvfplus_region_*.csv.gz.part*"))
+    bases = sorted(set(p.name.split(".part")[0] for p in part_files))
+    for base in bases:
+        cache_key = f"reassembled::{base}"
+        if cache_key not in _regional_cache_memoire:
+            mes_parts = sorted(
+                (p for p in part_files if p.name.startswith(base + ".part")),
+                key=lambda p: p.name,
+            )
+            data = b"".join(p.read_bytes() for p in mes_parts)
+            import io, gzip as gzip_module
+            _regional_cache_memoire[cache_key] = pd.read_csv(
+                io.BytesIO(data), compression="gzip"
+            )
+        df_region = _regional_cache_memoire[cache_key]
         df_dept = df_region[df_region["code_commune"].astype(str).str.startswith(dept)]
         if not df_dept.empty:
             return df_dept.reset_index(drop=True)
