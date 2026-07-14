@@ -472,6 +472,44 @@ with tab_recherche:
                         "Aucune vente DVF ne correspond à ce numéro et cette rue "
                         "précisément (sur toutes les années chargées)."
                     )
+                    with st.expander("🔧 Diagnostic technique (cadastre / Cerema)"):
+                        with st.spinner("Test en direct de la requête cadastre..."):
+                            try:
+                                diag_parcelle = core.get_parcelle_cadastrale(
+                                    geo["latitude"], geo["longitude"]
+                                )
+                            except Exception as exc:
+                                diag_parcelle = None
+                                st.error(f"Exception levée : {type(exc).__name__}: {exc}")
+                        st.write("**Résultat de `get_parcelle_cadastrale` :**")
+                        st.json(diag_parcelle if diag_parcelle else {"resultat": None})
+
+                        if diag_parcelle:
+                            st.write(
+                                f"nb_parcelles = **{diag_parcelle.get('nb_parcelles')}** "
+                                f"(source : {diag_parcelle.get('source')})"
+                            )
+                            if diag_parcelle.get("nb_parcelles") != 1:
+                                st.warning(
+                                    "Plus d'une parcelle trouvée (ou 0) — c'est pour ça "
+                                    "que le lien avec Cerema ne se fait pas automatiquement "
+                                    "(voir la logique de sécurité anti-faux-positifs)."
+                                )
+                            else:
+                                diag_cerema = core.load_cerema_cache(active_dept)
+                                if diag_cerema is None:
+                                    st.warning("Aucun cache Cerema trouvé pour ce département.")
+                                else:
+                                    sec = str(diag_parcelle.get("section") or "").lstrip("0").upper()
+                                    num = str(diag_parcelle.get("numero") or "").lstrip("0")
+                                    diag_cerema = diag_cerema.copy()
+                                    diag_cerema["_section"] = diag_cerema["id_parcelle"].astype(str).str[8:10].str.lstrip("0").str.upper()
+                                    diag_cerema["_numero"] = diag_cerema["id_parcelle"].astype(str).str[10:14].str.lstrip("0")
+                                    diag_match = diag_cerema[(diag_cerema["_section"] == sec) & (diag_cerema["_numero"] == num)]
+                                    st.write(f"Recherché dans Cerema : section=**{sec}**, numéro=**{num}**")
+                                    st.write(f"Lignes Cerema correspondantes trouvées : **{len(diag_match)}**")
+                                    if not diag_match.empty:
+                                        st.dataframe(diag_match, use_container_width=True)
                 else:
                     st.dataframe(history, use_container_width=True)
                     st.caption(
