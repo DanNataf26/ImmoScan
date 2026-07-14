@@ -215,66 +215,63 @@ with st.sidebar.expander("Options avancées"):
         )
         st.info(
             "💡 **Astuce pour éviter de réimporter à chaque redéploiement** : "
-            "une fois importé ci-dessous, téléchargez le fichier généré "
-            f"(`output/cerema_dvfplus_{dept}.csv`) et déposez-le directement "
-            f"dans un dossier `cerema_data/` de votre dépôt GitHub — l'app le "
-            "détectera alors automatiquement de façon permanente, sans "
-            "jamais avoir besoin de le réimporter."
+            "une fois importé ci-dessous, téléchargez le(s) fichier(s) généré(s) "
+            "(`output/cerema_dvfplus_{dept}.csv`) et déposez-le(s) directement "
+            "dans un dossier `cerema_data/` de votre dépôt GitHub — l'app les "
+            "détecte alors automatiquement de façon permanente, sans jamais "
+            "avoir besoin de les réimporter."
         )
         cerema_zip = st.file_uploader(
             "Archive ZIP Cerema DVF+", type=["zip"], key="cerema_zip_upload",
-            help="Les archives régionales (plusieurs départements) peuvent peser "
-                 "plusieurs centaines de Mo — la limite d'upload est fixée à 1 Go "
+            help="Les archives régionales (plusieurs départements dans un seul "
+                 "fichier, comme distribuées par Cerema) peuvent peser plusieurs "
+                 "centaines de Mo — la limite d'upload est fixée à 1 Go "
                  "(voir .streamlit/config.toml).",
         )
         if cerema_zip is not None:
-            if st.button("Importer pour ce département", key="cerema_import_button"):
-                with st.spinner(f"Import Cerema DVF+ pour le {dept} en cours..."):
-                    tmp_path = core.OUTPUT_DIR / f"_tmp_cerema_{dept}.zip"
-                    core.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-                    tmp_path.write_bytes(cerema_zip.getvalue())
+            tmp_path = core.OUTPUT_DIR / "_tmp_cerema_upload.zip"
+            core.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            tmp_path.write_bytes(cerema_zip.getvalue())
+            try:
+                depts_detectes = core.list_departements_in_zip(str(tmp_path))
+            except Exception:
+                depts_detectes = []
+
+            if depts_detectes:
+                st.caption(
+                    f"📦 {len(depts_detectes)} département(s) détecté(s) dans "
+                    f"cette archive : {', '.join(depts_detectes)}."
+                )
+
+            col_dept, col_region = st.columns(2)
+            with col_dept:
+                if st.button(f"Importer seulement le {dept}", key="cerema_import_button"):
+                    with st.spinner(f"Import Cerema DVF+ pour le {dept} en cours..."):
+                        try:
+                            msg = core.import_cerema_dvfplus(str(tmp_path), dept)
+                            st.success(msg)
+                        except SystemExit as e:
+                            st.error(str(e))
+            with col_region:
+                if st.button("Importer toute la région", key="cerema_import_region_button"):
+                    status_box = st.status("Import de la région en cours...", expanded=True)
                     try:
-                        msg = core.import_cerema_dvfplus(str(tmp_path), dept)
+                        msg = core.import_cerema_dvfplus_region(
+                            str(tmp_path), progress_callback=status_box.write
+                        )
+                        status_box.update(label="✅ Import régional terminé", state="complete")
                         st.success(msg)
                     except SystemExit as e:
+                        status_box.update(label="Erreur", state="error")
                         st.error(str(e))
-                    finally:
-                        tmp_path.unlink(missing_ok=True)
+            tmp_path.unlink(missing_ok=True)
+
         if uploaded_exists:
             st.caption(
                 f"✅ Historique Cerema DVF+ importé pour le {dept} pour cette "
                 "session (sera perdu au prochain redémarrage de l'app — voir "
                 "l'astuce ci-dessus pour le rendre permanent)."
             )
-
-    st.divider()
-    st.markdown("**🧪 Test expérimental : API Cerema en direct (sans fichier)**")
-    st.caption(
-        "Teste si l'API ouverte DVF+ du Cerema (module `apifoncier`) peut "
-        "remplacer le circuit fichier ZIP ci-dessus — automatique, sans "
-        "jeton d'après la documentation officielle, mais API en "
-        "préproduction (bêta). Isolé : un échec ici n'affecte rien d'autre "
-        "dans l'app."
-    )
-    code_insee_test = st.text_input(
-        "Code INSEE de la commune à tester (⚠️ différent du code postal !)",
-        value="94021",
-        help=(
-            "Le code INSEE n'est PAS le code postal. Exemples pour le "
-            "Val-de-Marne : 94021 = Chennevières-sur-Marne (code postal "
-            "94430), 94028 = Créteil (code postal 94000), 94080 = Vincennes "
-            "(code postal 94300). Cherchez '[commune] code insee' si besoin."
-        ),
-        key="cerema_api_test_insee",
-    )
-    if st.button("Tester l'appel en direct", key="cerema_api_test_button"):
-        with st.spinner("Appel à l'API Cerema en cours..."):
-            resultat = core.test_cerema_api_live(code_insee_test)
-        if resultat["succes"]:
-            st.success(resultat["message"])
-            st.dataframe(resultat["apercu"], use_container_width=True)
-        else:
-            st.warning(resultat["message"])
 
 st.sidebar.divider()
 st.sidebar.markdown("**Préparation des données**")

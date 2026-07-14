@@ -121,13 +121,40 @@ Licence Ouverte v2.0 (Etalab) — réutilisation libre sous réserve de
 mentionner la source, ce que l'app fait automatiquement (colonne "source"
 dans les tableaux d'historique et de comparables).
 
-**Import manuel obligatoire** : contrairement à geo-dvf, ces fichiers sont
+**Import manuel requis** : contrairement à geo-dvf, ces fichiers sont
 distribués via des archives ZIP sur Box.com
-(cerema.app.box.com/v/dvfplus-opendata), sans URL directe automatisable par
-département. Depuis "Options avancées" dans la barre latérale : téléchargez
-l'archive de votre région sur ce lien, puis déposez-la dans l'app — elle est
-alors automatiquement filtrée pour votre département, nettoyée, et mise en
-cache localement (pas besoin de la re-déposer à chaque session).
+(cerema.app.box.com/v/dvfplus-opendata), sans URL directe automatisable.
+**Cerema distribue une archive par région**, chacune contenant un fichier
+CSV par département (ex. l'archive Île-de-France contient
+`dvf_plus_d75.csv`, `dvf_plus_d77.csv`, ... `dvf_plus_d95.csv`). L'app peut
+importer soit un seul département de l'archive, soit tous d'un coup.
+
+**Deux façons de l'intégrer** :
+
+1. **Intégration permanente (recommandée)** : une fois le(s) fichier(s)
+   généré(s) (via l'upload dans l'app, ou fournis directement par Claude),
+   déposez-le(s) dans un dossier `cerema_data/` à la racine du dépôt GitHub,
+   nommé(s) `cerema_dvfplus_{dept}.csv` (ex. `cerema_data/cerema_dvfplus_94.csv`).
+   Une fois traité et filtré, chaque fichier ne pèse qu'une quinzaine de Mo
+   par département (largement sous la limite GitHub de 100 Mo) — l'app les
+   détecte alors automatiquement à chaque démarrage, **sans jamais avoir
+   besoin de les réimporter**, même après suppression/redéploiement de l'app
+   (contrairement à un import via upload, qui utilise un stockage éphémère
+   perdu à chaque redémarrage).
+2. **Upload temporaire depuis l'app** : dans "Options avancées" (uniquement
+   affiché si aucun fichier intégré n'existe déjà pour le département actif) :
+   téléchargez l'archive de votre région sur le lien Box ci-dessus, puis
+   déposez-la dans l'app. Deux boutons sont alors proposés :
+   - **"Importer seulement le {dept}"** : traite uniquement le département
+     actuellement sélectionné dans la barre latérale.
+   - **"Importer toute la région"** : détecte et traite automatiquement
+     *tous* les départements présents dans l'archive en une seule fois
+     (chacun mis en cache séparément, un fichier par département — l'app
+     reste structurée département par département en interne).
+
+   Les résultats (dans `output/cerema_dvfplus_{dept}.csv`, un par
+   département) peuvent ensuite être récupérés et déposés dans
+   `cerema_data/` pour les rendre permanents (méthode 1).
 
 **Différences avec geo-dvf, importantes à connaître** :
 - **Pas de champ adresse** (numéro + rue) dans cette source — seulement des
@@ -146,11 +173,19 @@ cache localement (pas besoin de la re-déposer à chaque session).
 - Coordonnées converties depuis Lambert-93 (EPSG:2154) en pur Python (sans
   dépendance pyproj), validées à ~10m près sur un point de référence connu.
 
-**Piste explorée mais non retenue pour l'instant** : une vraie API REST du
-Cerema existe (`apidf-preprod.cerema.fr`, module Python `apifoncier`) qui
-permettrait un import automatique par commune, sans téléchargement manuel.
-Elle est en préproduction (bêta) et son mode d'authentification n'a pas été
-vérifié — à explorer si l'import manuel devient contraignant.
+**Piste testée et abandonnée définitivement** : une vraie API REST du Cerema
+existe (`apidf-preprod.cerema.fr`, module Python `apifoncier`) qui aurait pu
+permettre un import automatique par commune, sans téléchargement manuel de
+ZIP. Confirmé sans jeton nécessaire pour le flux DVF+ open-data (contrairement
+à DV3F/Fichiers fonciers, réservés aux organismes publics). **Mais son
+installation (`pip install apifoncier`) entraîne `geopandas` et toute une
+pile géospatiale compilée (GDAL via pyogrio, shapely, pyproj) qui provoque un
+`Segmentation fault` systématique au démarrage sur Streamlit Community
+Cloud** — exactement le même symptôme qu'avec `streamlit-searchbox`
+précédemment. **Ne pas retenter sans une piste nouvelle** (ex. un
+environnement d'hébergement différent, ou une version future du paquet sans
+cette dépendance lourde). Le circuit ZIP + fichier intégré au dépôt
+(`cerema_data/`) reste la solution fiable et déjà en place.
 
 ## Année de construction (BDNB)
 

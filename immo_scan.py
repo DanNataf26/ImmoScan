@@ -447,11 +447,76 @@ def lambert93_to_wgs84(x: float, y: float) -> tuple[float, float]:
 
 CEREMA_ANNEE_MAX = 2020  # au-delà, on utilise la source principale geo-dvf
 
+def _clean_cerema_dataframe(df: pd.DataFrame, annee_max: int) -> pd.DataFrame:
+    """
+    Nettoie un DataFrame Cerema DVF+ brut (un département) : filtre les
+    ventes mono-type (uniquement maisons, ou uniquement appartements),
+    calcule le prix/m², convertit les coordonnées Lambert-93 en WGS84.
+    Fonction interne réutilisée pour un import département par département
+    ou région par région (plusieurs départements dans la même archive).
+    """
+    df = df[(df["libnatmut"] == "Vente") & (df["anneemut"] <= annee_max)].copy()
+
+    maison_pure = (df["nblocmai"] > 0) & (df["nblocapt"] == 0) & (df["nblocact"] == 0)
+    appt_pure = (df["nblocapt"] > 0) & (df["nblocmai"] == 0) & (df["nblocact"] == 0)
+
+    d_maison = df[maison_pure].copy()
+    d_maison["type_local"] = "Maison"
+    d_maison["surface_reelle_bati"] = d_maison["sbatmai"]
+
+    d_appt = df[appt_pure].copy()
+    d_appt["type_local"] = "Appartement"
+    d_appt["surface_reelle_bati"] = d_appt["sbatapt"]
+
+    combined = pd.concat([d_maison, d_appt], ignore_index=True)
+    if combined.empty:
+        return combined
+
+    combined = combined.rename(columns={"datemut": "date_mutation", "anneemut": "annee",
+                                          "valeurfonc": "valeur_fonciere"})
+    combined = combined[(combined["valeur_fonciere"] > 10_000) & (combined["surface_reelle_bati"] > 8)]
+    combined["prix_m2"] = combined["valeur_fonciere"] / combined["surface_reelle_bati"]
+    combined = combined[(combined["prix_m2"] > 500) & (combined["prix_m2"] < 25_000)]
+
+    combined["id_parcelle"] = combined["l_idpar"].astype(str).str.split(",").str[0]
+    combined["nom_commune"] = None  # pas de nom de commune dans cette source (voir README)
+    combined["code_commune"] = combined["l_codinsee"].astype(str).str.split(",").str[0]
+
+    lat_lon = combined.apply(
+        lambda r: lambert93_to_wgs84(r["geompar_x"], r["geompar_y"]), axis=1
+    )
+    combined["latitude"] = lat_lon.map(lambda t: t[0])
+    combined["longitude"] = lat_lon.map(lambda t: t[1])
+    combined["source"] = "Cerema DVF+"
+
+    cols = ["date_mutation", "annee", "valeur_fonciere", "surface_reelle_bati",
+            "type_local", "prix_m2", "id_parcelle", "code_commune", "nom_commune",
+            "latitude", "longitude", "source"]
+    return combined[cols].reset_index(drop=True)
+
+
+def list_departements_in_zip(zip_path: str) -> list[str]:
+    """
+    Liste les départements présents dans une archive Cerema DVF+ (régionale
+    ou départementale), en repérant les fichiers `dvf_plus_d{dept}.csv`
+    qu'elle contient.
+    """
+    import zipfile, re
+
+    with zipfile.ZipFile(zip_path) as zf:
+        depts = []
+        for name in zf.namelist():
+            m = re.search(r"dvf_plus_d(\d{2,3})\.csv$", name)
+            if m:
+                depts.append(m.group(1))
+    return sorted(depts)
+
+
 def load_cerema_dvfplus(zip_path: str, dept: str, annee_max: int = CEREMA_ANNEE_MAX) -> pd.DataFrame:
     """
-    Importe et nettoie les données Cerema DVF+ pour un département, à partir
-    d'une archive ZIP téléchargée manuellement sur
-    https://cerema.app.box.com/v/dvfplus-opendata (voir README).
+    Importe et nettoie les données Cerema DVF+ pour UN département, à partir
+    d'une archive ZIP (départementale ou régionale) téléchargée manuellement
+    sur https://cerema.app.box.com/v/dvfplus-opendata (voir README).
 
     Contrairement à geo-dvf, cette source n'a pas de champ adresse (numéro +
     rue) — seulement des identifiants de parcelle (l_idpar) et des
@@ -477,41 +542,49 @@ def load_cerema_dvfplus(zip_path: str, dept: str, annee_max: int = CEREMA_ANNEE_
         with zf.open(candidates[0]) as f:
             df = pd.read_csv(f, sep="|", low_memory=False)
 
-    df = df[(df["libnatmut"] == "Vente") & (df["anneemut"] <= annee_max)].copy()
+    return _clean_cerema_dataframe(df, annee_max)
 
-    maison_pure = (df["nblocmai"] > 0) & (df["nblocapt"] == 0) & (df["nblocact"] == 0)
-    appt_pure = (df["nblocapt"] > 0) & (df["nblocmai"] == 0) & (df["nblocact"] == 0)
 
-    d_maison = df[maison_pure].copy()
-    d_maison["type_local"] = "Maison"
-    d_maison["surface_reelle_bati"] = d_maison["sbatmai"]
+def load_cerema_dvfplus_region(zip_path: str, depts: list[str] | None = None,
+                                annee_max: int = CEREMA_ANNEE_MAX,
+                                progress_callback=None) -> dict[str, pd.DataFrame]:
+    """
+    Importe et nettoie les données Cerema DVF+ pour TOUS les départements
+    d'une archive régionale en une seule fois (Cerema distribue ses fichiers
+    par région, chacune contenant un CSV par département — ex. la région
+    Île-de-France contient dvf_plus_d75.csv, d77.csv, ..., d95.csv).
 
-    d_appt = df[appt_pure].copy()
-    d_appt["type_local"] = "Appartement"
-    d_appt["surface_reelle_bati"] = d_appt["sbatapt"]
+    Si `depts` n'est pas fourni, traite tous les départements détectés dans
+    l'archive (voir `list_departements_in_zip`). `progress_callback(message)`
+    est appelé à chaque département traité, pour affichage côté app.
 
-    combined = pd.concat([d_maison, d_appt], ignore_index=True)
-    combined = combined.rename(columns={"datemut": "date_mutation", "anneemut": "annee",
-                                          "valeurfonc": "valeur_fonciere"})
-    combined = combined[(combined["valeur_fonciere"] > 10_000) & (combined["surface_reelle_bati"] > 8)]
-    combined["prix_m2"] = combined["valeur_fonciere"] / combined["surface_reelle_bati"]
-    combined = combined[(combined["prix_m2"] > 500) & (combined["prix_m2"] < 25_000)]
+    Retourne un dict {département: DataFrame nettoyé}.
+    """
+    import zipfile
 
-    combined["id_parcelle"] = combined["l_idpar"].astype(str).str.split(",").str[0]
-    combined["nom_commune"] = None  # pas de nom de commune dans cette source (voir README)
-    combined["code_commune"] = combined["l_codinsee"].astype(str).str.split(",").str[0]
+    if depts is None:
+        depts = list_departements_in_zip(zip_path)
+    if not depts:
+        raise SystemExit(
+            "Aucun fichier dvf_plus_d{dept}.csv trouvé dans cette archive. "
+            "Vérifiez qu'il s'agit bien d'une archive Cerema DVF+ open-data."
+        )
 
-    lat_lon = combined.apply(
-        lambda r: lambert93_to_wgs84(r["geompar_x"], r["geompar_y"]), axis=1
-    )
-    combined["latitude"] = lat_lon.map(lambda t: t[0])
-    combined["longitude"] = lat_lon.map(lambda t: t[1])
-    combined["source"] = "Cerema DVF+"
+    resultats = {}
+    with zipfile.ZipFile(zip_path) as zf:
+        for dept in depts:
+            candidates = [n for n in zf.namelist() if n.endswith(f"dvf_plus_d{dept}.csv")]
+            if not candidates:
+                if progress_callback:
+                    progress_callback(f"⚠️ {dept} : fichier introuvable dans l'archive, ignoré.")
+                continue
+            if progress_callback:
+                progress_callback(f"Traitement du département {dept}...")
+            with zf.open(candidates[0]) as f:
+                df_brut = pd.read_csv(f, sep="|", low_memory=False)
+            resultats[dept] = _clean_cerema_dataframe(df_brut, annee_max)
 
-    cols = ["date_mutation", "annee", "valeur_fonciere", "surface_reelle_bati",
-            "type_local", "prix_m2", "id_parcelle", "code_commune", "nom_commune",
-            "latitude", "longitude", "source"]
-    return combined[cols].reset_index(drop=True)
+    return resultats
 
 
 def import_cerema_dvfplus(zip_path: str, dept: str) -> str:
@@ -532,79 +605,33 @@ def import_cerema_dvfplus(zip_path: str, dept: str) -> str:
     )
 
 
-def test_cerema_api_live(code_insee: str, tentatives: int = 3) -> dict:
+def import_cerema_dvfplus_region(zip_path: str, depts: list[str] | None = None,
+                                  progress_callback=None) -> str:
     """
-    Teste en direct l'API DVF+ open-data du Cerema (module Python
-    `apifoncier`, flux "ouvert" — documentation officielle indique qu'aucun
-    jeton n'est requis pour ce flux, contrairement à DV3F/Fichiers fonciers).
-
-    Isolée dans sa propre fonction avec import différé et capture large des
-    exceptions : un souci ici (paquet absent, API indisponible, changement de
-    schéma...) ne doit jamais faire planter le reste de l'application.
-
-    Réessaie plusieurs fois en cas de timeout (l'API est en préproduction,
-    donc parfois lente plutôt que réellement bloquée) avant d'abandonner.
-    Retourne un dict avec 'succes' (bool), 'message', et 'apercu' (DataFrame
-    ou None) pour affichage direct dans l'app.
+    Importe les données Cerema DVF+ pour tous les départements d'une archive
+    régionale en une fois, et met chacun en cache séparément (un fichier par
+    département, pour rester cohérent avec le reste de l'app qui fonctionne
+    département par département). Retourne un message de résumé global.
     """
-    import time
+    resultats = load_cerema_dvfplus_region(zip_path, depts, progress_callback=progress_callback)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    try:
-        import apifoncier.dvf_opendata as dvf
-    except ImportError as exc:
-        return {
-            "succes": False,
-            "message": f"Module 'apifoncier' non installé ou indisponible : {exc}",
-            "apercu": None,
-        }
+    lignes_resume = []
+    for dept, df in resultats.items():
+        cache_path = OUTPUT_DIR / f"cerema_dvfplus_{dept}.csv"
+        df.to_csv(cache_path, index=False)
+        annees = f"{df['annee'].min()}-{df['annee'].max()}" if not df.empty else "aucune"
+        lignes_resume.append(f"  • {dept} : {len(df)} transactions ({annees})")
+        if progress_callback:
+            progress_callback(f"✅ {dept} : {len(df)} transactions importées.")
 
-    derniere_erreur = None
-    for tentative in range(1, tentatives + 1):
-        try:
-            df = dvf.mutations(code_insee=code_insee)
-            if df is None or df.empty:
-                return {
-                    "succes": False,
-                    "message": (
-                        f"Appel réussi (tentative {tentative}/{tentatives}) mais "
-                        f"aucune donnée retournée pour la commune {code_insee} "
-                        "(l'API a répondu sans erreur, mais avec un résultat vide)."
-                    ),
-                    "apercu": None,
-                }
-            return {
-                "succes": True,
-                "message": (
-                    f"✅ {len(df)} mutations récupérées en direct pour la commune "
-                    f"{code_insee} (tentative {tentative}/{tentatives}), sans jeton "
-                    "ni fichier à télécharger."
-                ),
-                "apercu": df.head(10),
-            }
-        except Exception as exc:
-            derniere_erreur = exc
-            is_timeout = "timeout" in str(exc).lower() or "timed out" in str(exc).lower()
-            if is_timeout and tentative < tentatives:
-                time.sleep(3)
-                continue
-            break
-
-    is_timeout = derniere_erreur is not None and (
-        "timeout" in str(derniere_erreur).lower() or "timed out" in str(derniere_erreur).lower()
+    total = sum(len(df) for df in resultats.values())
+    return (
+        f"{total} transactions Cerema DVF+ importées au total pour "
+        f"{len(resultats)} département(s) :\n" + "\n".join(lignes_resume) +
+        "\n\nSource : Cerema, DVF+ open-data, Licence Ouverte v2.0 (Etalab)."
     )
-    if is_timeout:
-        message = (
-            f"⏱️ Délai dépassé après {tentatives} tentatives : "
-            f"{type(derniere_erreur).__name__}: {derniere_erreur}\n\n"
-            "Ce n'est PAS un refus d'accès (pas d'erreur d'authentification) — "
-            "la connexion s'établit normalement, mais le serveur (en "
-            "préproduction/bêta chez Cerema) ne répond pas assez vite. "
-            "Peut valoir le coup de réessayer plus tard ou à une autre heure."
-        )
-    else:
-        message = f"Échec de l'appel à l'API Cerema : {type(derniere_erreur).__name__}: {derniere_erreur}"
 
-    return {"succes": False, "message": message, "apercu": None}
 
 
 CEREMA_BUNDLED_DIR = Path(__file__).parent / "cerema_data"
