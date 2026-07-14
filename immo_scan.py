@@ -714,6 +714,40 @@ def _load_regional_file_cached(path: Path) -> pd.DataFrame:
     return _regional_cache_memoire[key]
 
 
+def _completer_noms_commune(df: pd.DataFrame, dept: str) -> pd.DataFrame:
+    """
+    Complète les noms de commune manquants (source Cerema, qui ne fournit
+    qu'un code INSEE, jamais de nom — voir README) à partir de la
+    correspondance code_commune -> nom_commune déjà connue dans le cache
+    des transactions DVF récentes (2021+) de ce département. Ne couvre pas
+    100% des cas (une commune peut n'avoir eu aucune vente DVF récente),
+    mais comble la grande majorité des trous en pratique.
+    """
+    if "nom_commune" not in df.columns or df["nom_commune"].notna().all():
+        return df
+
+    dvf_cache_path = OUTPUT_DIR / f"transactions_nettoyees_{dept}.csv"
+    if not dvf_cache_path.exists():
+        return df
+
+    dvf = pd.read_csv(dvf_cache_path, usecols=["code_commune", "nom_commune"])
+    mapping = (
+        dvf.dropna(subset=["code_commune", "nom_commune"])
+           .drop_duplicates("code_commune")
+           .set_index("code_commune")["nom_commune"]
+    )
+
+    df = df.copy()
+    df["nom_commune"] = df["nom_commune"].astype(object)
+    manquants = df["nom_commune"].isna()
+    df.loc[manquants, "nom_commune"] = (
+        df.loc[manquants, "code_commune"].astype(str).map(
+            {str(k): v for k, v in mapping.items()}
+        )
+    )
+    return df
+
+
 def load_cerema_cache(dept: str) -> pd.DataFrame | None:
     """
     Charge les données Cerema DVF+ pour un département. Cherche, dans cet
@@ -731,12 +765,16 @@ def load_cerema_cache(dept: str) -> pd.DataFrame | None:
 
     Les fichiers intégrés au dépôt (1 et 2) survivent aux redéploiements et
     reboots ; le cache d'upload (3) est éphémère.
+
+    Dans tous les cas, les noms de commune manquants (Cerema ne fournit
+    qu'un code INSEE) sont complétés autant que possible à partir des
+    données DVF récentes du même département (voir `_completer_noms_commune`).
     """
     for regional_path in sorted(CEREMA_BUNDLED_DIR.glob("cerema_dvfplus_region_*.csv.gz")):
         df_region = _load_regional_file_cached(regional_path)
         df_dept = df_region[df_region["code_commune"].astype(str).str.startswith(dept)]
         if not df_dept.empty:
-            return df_dept.reset_index(drop=True)
+            return _completer_noms_commune(df_dept.reset_index(drop=True), dept)
 
     # Fichiers régionaux découpés en morceaux (.part001, .part002, ...) :
     # regroupés par nom de base, recollés avant lecture.
@@ -750,22 +788,22 @@ def load_cerema_cache(dept: str) -> pd.DataFrame | None:
                 key=lambda p: p.name,
             )
             data = b"".join(p.read_bytes() for p in mes_parts)
-            import io, gzip as gzip_module
+            import io
             _regional_cache_memoire[cache_key] = pd.read_csv(
                 io.BytesIO(data), compression="gzip"
             )
         df_region = _regional_cache_memoire[cache_key]
         df_dept = df_region[df_region["code_commune"].astype(str).str.startswith(dept)]
         if not df_dept.empty:
-            return df_dept.reset_index(drop=True)
+            return _completer_noms_commune(df_dept.reset_index(drop=True), dept)
 
     bundled_path = CEREMA_BUNDLED_DIR / f"cerema_dvfplus_{dept}.csv"
     if bundled_path.exists():
-        return pd.read_csv(bundled_path)
+        return _completer_noms_commune(pd.read_csv(bundled_path), dept)
 
     cache_path = OUTPUT_DIR / f"cerema_dvfplus_{dept}.csv"
     if cache_path.exists():
-        return pd.read_csv(cache_path)
+        return _completer_noms_commune(pd.read_csv(cache_path), dept)
 
     return None
 
