@@ -1060,15 +1060,20 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
                 cerema = cerema.copy()
                 cerema["_section"] = cerema["id_parcelle"].astype(str).str[8:10].str.lstrip("0").str.upper()
                 cerema["_numero"] = cerema["id_parcelle"].astype(str).str[10:14].str.lstrip("0")
+                cerema["_code_insee"] = cerema["id_parcelle"].astype(str).str[0:5]
                 p = parcelle_info["parcelles"][0]
                 sec = str(p.get("section") or "").lstrip("0").upper()
                 num = str(p.get("numero") or "").lstrip("0")
+                code_insee_cible = str(p.get("code_insee") or "").strip()
                 hist_cerema = (
-                    cerema[(cerema["_section"] == sec) & (cerema["_numero"] == num)].copy()
-                    if sec and num else pd.DataFrame()
+                    cerema[
+                        (cerema["_section"] == sec) & (cerema["_numero"] == num)
+                        & (cerema["_code_insee"] == code_insee_cible)
+                    ].copy()
+                    if sec and num and code_insee_cible else pd.DataFrame()
                 )
                 if not hist_cerema.empty:
-                    hist_cerema = hist_cerema.drop(columns=["_section", "_numero"])
+                    hist_cerema = hist_cerema.drop(columns=["_section", "_numero", "_code_insee"])
                     hist_cerema["correspondance"] = "Exacte (parcelle cadastrale confirmée via GPS, Cerema DVF+)"
                     hist_cerema["nom_commune"] = commune or hist_cerema.get("nom_commune")
                     hist_cerema["adresse_dvf"] = address

@@ -502,11 +502,16 @@ with tab_recherche:
                                 else:
                                     sec = str(diag_parcelle.get("section") or "").lstrip("0").upper()
                                     num = str(diag_parcelle.get("numero") or "").lstrip("0")
+                                    code_insee_cible = str(diag_parcelle.get("code_insee") or "").strip()
                                     diag_cerema = diag_cerema.copy()
                                     diag_cerema["_section"] = diag_cerema["id_parcelle"].astype(str).str[8:10].str.lstrip("0").str.upper()
                                     diag_cerema["_numero"] = diag_cerema["id_parcelle"].astype(str).str[10:14].str.lstrip("0")
-                                    diag_match = diag_cerema[(diag_cerema["_section"] == sec) & (diag_cerema["_numero"] == num)]
-                                    st.write(f"Recherché dans Cerema : section=**{sec}**, numéro=**{num}**")
+                                    diag_cerema["_code_insee"] = diag_cerema["id_parcelle"].astype(str).str[0:5]
+                                    diag_match = diag_cerema[
+                                        (diag_cerema["_section"] == sec) & (diag_cerema["_numero"] == num)
+                                        & (diag_cerema["_code_insee"] == code_insee_cible)
+                                    ]
+                                    st.write(f"Recherché dans Cerema : code_insee=**{code_insee_cible}**, section=**{sec}**, numéro=**{num}**")
                                     st.write(f"Lignes Cerema correspondantes trouvées : **{len(diag_match)}**")
                                     if not diag_match.empty:
                                         st.dataframe(diag_match, use_container_width=True)
