@@ -413,6 +413,7 @@ def _clean_cerema_dataframe(df: pd.DataFrame, annee_max: int) -> pd.DataFrame:
 
     maison_pure = (df["nblocmai"] > 0) & (df["nblocapt"] == 0) & (df["nblocact"] == 0)
     appt_pure = (df["nblocapt"] > 0) & (df["nblocmai"] == 0) & (df["nblocact"] == 0)
+    act_pure = (df["nblocact"] > 0) & (df["nblocmai"] == 0) & (df["nblocapt"] == 0)
 
     d_maison = df[maison_pure].copy()
     d_maison["type_local"] = "Maison"
@@ -422,7 +423,11 @@ def _clean_cerema_dataframe(df: pd.DataFrame, annee_max: int) -> pd.DataFrame:
     d_appt["type_local"] = "Appartement"
     d_appt["surface_reelle_bati"] = d_appt["sbatapt"]
 
-    combined = pd.concat([d_maison, d_appt], ignore_index=True)
+    d_act = df[act_pure].copy()
+    d_act["type_local"] = "Local industriel. commercial ou assimilé"
+    d_act["surface_reelle_bati"] = d_act["sbatact"]
+
+    combined = pd.concat([d_maison, d_appt, d_act], ignore_index=True)
     if combined.empty:
         return combined
 
@@ -430,7 +435,11 @@ def _clean_cerema_dataframe(df: pd.DataFrame, annee_max: int) -> pd.DataFrame:
                                           "valeurfonc": "valeur_fonciere"})
     combined = combined[(combined["valeur_fonciere"] > 10_000) & (combined["surface_reelle_bati"] > 8)]
     combined["prix_m2"] = combined["valeur_fonciere"] / combined["surface_reelle_bati"]
-    combined = combined[(combined["prix_m2"] > 500) & (combined["prix_m2"] < 25_000)]
+
+    est_commercial = combined["type_local"] == "Local industriel. commercial ou assimilé"
+    seuil_bas = est_commercial.map({True: 100, False: 500})
+    seuil_haut = est_commercial.map({True: 40_000, False: 25_000})
+    combined = combined[(combined["prix_m2"] > seuil_bas) & (combined["prix_m2"] < seuil_haut)]
 
     combined["id_parcelle"] = combined["l_idpar"].astype(str).str.split(",").str[0]
     combined["nom_commune"] = None  # pas de nom de commune dans cette source (voir README)
