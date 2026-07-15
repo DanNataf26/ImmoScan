@@ -473,15 +473,24 @@ with tab_recherche:
                         "précisément (sur toutes les années chargées)."
                     )
                     with st.expander("🔧 Diagnostic technique (cadastre / Cerema)"):
-                        with st.spinner("Test en direct de la requête cadastre..."):
+                        with st.spinner("Test en direct : RNB (par adresse) puis GPS si besoin..."):
                             try:
-                                diag_parcelle = core.get_parcelle_cadastrale(
-                                    geo["latitude"], geo["longitude"]
-                                )
+                                diag_parcelle = core.get_parcelle_via_rnb(geo["label"])
+                                methode_utilisee = "RNB (par adresse)"
                             except Exception as exc:
                                 diag_parcelle = None
-                                st.error(f"Exception levée : {type(exc).__name__}: {exc}")
-                        st.write("**Résultat de `get_parcelle_cadastrale` :**")
+                                methode_utilisee = None
+                                st.error(f"Exception RNB : {type(exc).__name__}: {exc}")
+                            if not diag_parcelle:
+                                try:
+                                    diag_parcelle = core.get_parcelle_cadastrale(
+                                        geo["latitude"], geo["longitude"]
+                                    )
+                                    methode_utilisee = "GPS (Géoplateforme/API Carto)"
+                                except Exception as exc:
+                                    st.error(f"Exception GPS : {type(exc).__name__}: {exc}")
+                        st.write(f"**Méthode ayant abouti : {methode_utilisee or 'aucune'}**")
+                        st.write("**Résultat :**")
                         st.json(diag_parcelle if diag_parcelle else {"resultat": None})
 
                         if diag_parcelle:

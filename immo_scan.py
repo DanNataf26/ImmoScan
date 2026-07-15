@@ -1036,23 +1036,33 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
                 result = pd.concat([result, hist_cerema], ignore_index=True)
 
     if result.empty and lat is not None and lon is not None:
-        # Repli : la parcelle cadastrale (API IGN, par coordonnées GPS) est
-        # indépendante de toute vente DVF — elle permet de chercher dans
-        # Cerema DVF+ même quand aucune vente récente (2021+) n'existe pour
-        # faire le pont habituel. Moins immédiat qu'une correspondance DVF
-        # directe, mais bien plus fiable qu'un simple repli de proximité.
+        # Repli : la parcelle cadastrale est indépendante de toute vente DVF
+        # — elle permet de chercher dans Cerema DVF+ même quand aucune vente
+        # récente (2021+) n'existe pour faire le pont habituel.
         #
-        # IMPORTANT : `get_parcelle_cadastrale` peut légitimement retourner
-        # PLUSIEURS parcelles candidates quand le point GPS est proche d'une
-        # frontière (comportement volontaire pour d'autres usages). Ici, on
-        # ne procède QUE si une seule parcelle sans ambiguïté est trouvée —
-        # sinon, on risquerait de mélanger l'historique de plusieurs biens
-        # voisins différents sous une même adresse, ce qui serait pire que
-        # de ne rien afficher.
+        # Priorité au RNB (recherche par l'ADRESSE elle-même, via le
+        # bâtiment identifié avec un score de confiance BAN) — bien plus
+        # fiable que la géolocalisation seule dans les zones denses ou
+        # subdivisées (lotissements, copropriétés), où plusieurs parcelles
+        # voisines peuvent être proches d'un même point GPS.
         try:
-            parcelle_info = get_parcelle_cadastrale(lat, lon)
+            parcelle_info = get_parcelle_via_rnb(address)
         except Exception:
             parcelle_info = None
+
+        if not parcelle_info:
+            # Repli sur les méthodes GPS (Géoplateforme puis API Carto).
+            # IMPORTANT : `get_parcelle_cadastrale` peut légitimement
+            # retourner PLUSIEURS parcelles candidates quand le point GPS
+            # est proche d'une frontière (comportement volontaire pour
+            # d'autres usages). Ici, on ne procède QUE si une seule parcelle
+            # sans ambiguïté est trouvée — sinon, on risquerait de mélanger
+            # l'historique de plusieurs biens voisins différents sous une
+            # même adresse, ce qui serait pire que de ne rien afficher.
+            try:
+                parcelle_info = get_parcelle_cadastrale(lat, lon)
+            except Exception:
+                parcelle_info = None
 
         if parcelle_info and parcelle_info.get("nb_parcelles") == 1 and parcelle_info.get("parcelles"):
             cerema = load_cerema_cache(dept)
@@ -1221,6 +1231,76 @@ def get_parcelle_by_identifiants(code_insee: str, section: str, numero: str) -> 
         return None
 
 
+RNB_API_URL = "https://rnb-api.beta.gouv.fr/api/alpha/buildings"
+
+
+def get_parcelle_via_rnb(address: str) -> dict | None:
+    """
+    Cherche la parcelle cadastrale d'une adresse via le RNB (Référentiel
+    National des Bâtiments, beta.gouv.fr — service public gratuit, sans clé).
+
+    Contrairement à une recherche par coordonnées GPS (qui peut être
+    ambiguë dans les zones denses/subdivisées, plusieurs parcelles pouvant
+    être proches d'un même point), cette méthode passe par l'ADRESSE
+    elle-même :
+    1. Le RNB géocode l'adresse via la BAN (avec un score de confiance) et
+       identifie LE bâtiment correspondant.
+    2. On récupère ensuite les parcelles cadastrales qui intersectent
+       géométriquement ce bâtiment précis, triées par taux de recouvrement
+       — on retient celle qui couvre le plus le bâtiment.
+
+    Documentation officielle : https://rnb-fr.gitbook.io/documentation
+    Non testé en conditions réelles faute d'accès réseau en développement —
+    suit précisément le schéma OpenAPI publié par le RNB.
+    """
+    import requests
+
+    try:
+        resp = requests.get(
+            f"{RNB_API_URL}/address/", params={"q": address}, timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") != "ok" or not data.get("results"):
+            return None
+        rnb_id = data["results"][0].get("rnb_id")
+        if not rnb_id:
+            return None
+
+        resp2 = requests.get(
+            f"{RNB_API_URL}/{rnb_id}/", params={"plots": 1}, timeout=10,
+        )
+        resp2.raise_for_status()
+        building = resp2.json()
+        plots = building.get("plots") or []
+        if not plots:
+            return None
+
+        meilleur = max(plots, key=lambda pl: pl.get("bdg_cover_ratio") or 0)
+        plot_id = meilleur.get("id")
+        parsed = parse_id_parcelle(plot_id) if plot_id else None
+        if not parsed:
+            return None
+
+        ratio = meilleur.get("bdg_cover_ratio")
+        ratio_txt = f"{ratio:.0%}" if isinstance(ratio, (int, float)) else "inconnu"
+        parcelle = {
+            "id_parcelle": plot_id,
+            "code_insee": parsed["code_insee"],
+            "prefixe": parsed["prefixe"],
+            "section": parsed["section"],
+            "numero": parsed["numero"],
+            "contenance_m2": None,
+        }
+        return {
+            **parcelle, "nb_parcelles": 1, "parcelles": [parcelle],
+            "source": f"RNB (bâtiment identifié par adresse, recouvrement {ratio_txt})",
+        }
+    except Exception as exc:
+        print(f"[warn] RNB échoué pour '{address}' : {exc}")
+        return None
+
+
 GEOPLATEFORME_REVERSE_URL = "https://data.geopf.fr/geocodage/reverse"
 
 
@@ -1259,15 +1339,24 @@ def _get_parcelle_via_geoplateforme(lat: float, lon: float) -> dict | None:
         # candidats essayés par prudence (cf. docstring).
         section = p.get("section") or p.get("sheet_number") or p.get("feuille")
         numero = p.get("number") or p.get("numero") or p.get("insee_number")
-        code_insee = (
-            p.get("citycode") or p.get("municipalitycode") or p.get("commune")
-            or p.get("departmentcode")
-        )
+        id_parcelle_brut = p.get("id") or p.get("cleabs")
+
+        # code_insee dérivé de préférence depuis id_parcelle (5 premiers
+        # caractères) plutôt que d'un champ séparé ("citycode" observé en
+        # conditions réelles tronqué à 3 chiffres, sans le département —
+        # ex. "028" au lieu de "94028").
+        code_insee = None
+        if id_parcelle_brut and len(str(id_parcelle_brut)) >= 5:
+            code_insee = str(id_parcelle_brut)[0:5]
+        if not code_insee:
+            code_insee = (
+                p.get("citycode") or p.get("municipalitycode") or p.get("commune")
+            )
         if not section or not numero:
             return None
 
         parcelle = {
-            "id_parcelle": p.get("id") or p.get("cleabs"),
+            "id_parcelle": id_parcelle_brut,
             "code_insee": code_insee,
             "prefixe": p.get("prefixe") or p.get("com_abs") or "000",
             "section": section,
