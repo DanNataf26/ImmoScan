@@ -473,7 +473,19 @@ with tab_recherche:
                         "précisément (sur toutes les années chargées)."
                     )
                     with st.expander("🔧 Diagnostic technique (cadastre / Cerema)"):
-                        with st.spinner("Test en direct : RNB (par adresse) puis GPS si besoin..."):
+                        with st.spinner("Test en direct : RNB étape 1 (adresse)..."):
+                            try:
+                                import requests as _requests
+                                _resp_rnb1 = _requests.get(
+                                    f"{core.RNB_API_URL}/address/",
+                                    params={"q": geo["label"]}, timeout=10,
+                                )
+                                st.write(f"**RNB étape 1 — code HTTP : {_resp_rnb1.status_code}**")
+                                st.json(_resp_rnb1.json())
+                            except Exception as exc:
+                                st.error(f"Exception RNB étape 1 : {type(exc).__name__}: {exc}")
+
+                        with st.spinner("Test en direct : RNB (complet) puis GPS si besoin..."):
                             try:
                                 diag_parcelle = core.get_parcelle_via_rnb(geo["label"])
                                 methode_utilisee = "RNB (par adresse)"
