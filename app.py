@@ -473,15 +473,8 @@ with tab_recherche:
                         "précisément (sur toutes les années chargées)."
                     )
                 else:
-                    st.dataframe(history, use_container_width=True)
-                    st.caption(
-                        "Filtré sur ce numéro + cette rue + cette commune "
-                        "exactement, toutes années chargées confondues. En "
-                        "copropriété, plusieurs lots peuvent partager ce numéro "
-                        "— vérifiez la colonne 'correspondance' et l'adresse "
-                        "DVF affichée."
-                    )
                     exact_rows = history[history["correspondance"].str.startswith("Exacte")]
+                    types_bien_adresse = []
                     if not exact_rows.empty:
                         derniere = exact_rows.iloc[0]  # déjà triée par date décroissante
                         suggested_surface = derniere.get("surface_reelle_bati")
@@ -490,6 +483,41 @@ with tab_recherche:
                             parsed = core.parse_id_parcelle(derniere.get("id_parcelle"))
                             if parsed:
                                 known_parcelle_ids = parsed
+                        types_bien_adresse = sorted(exact_rows["type_local"].dropna().unique())
+
+                    if len(types_bien_adresse) > 1:
+                        # Adresse mixte (ex. immeuble avec commerce + habitation) :
+                        # on demande à l'utilisateur quel type consulter, par défaut
+                        # le type de la vente exacte la plus récente.
+                        index_defaut = (
+                            types_bien_adresse.index(suggested_type)
+                            if suggested_type in types_bien_adresse else 0
+                        )
+                        type_bien_choisi = st.radio(
+                            "Plusieurs types de bien trouvés à cette adresse — "
+                            "lequel consulter ?",
+                            types_bien_adresse, index=index_defaut,
+                            horizontal=True, key="type_bien_historique",
+                        )
+                        history_affichee = history[
+                            history["type_local"].isna()
+                            | (history["type_local"] == type_bien_choisi)
+                        ]
+                        st.session_state["type_bien_adresse"] = type_bien_choisi
+                    else:
+                        history_affichee = history
+                        st.session_state["type_bien_adresse"] = (
+                            types_bien_adresse[0] if types_bien_adresse else None
+                        )
+
+                    st.dataframe(history_affichee, use_container_width=True)
+                    st.caption(
+                        "Filtré sur ce numéro + cette rue + cette commune "
+                        "exactement, toutes années chargées confondues. En "
+                        "copropriété, plusieurs lots peuvent partager ce numéro "
+                        "— vérifiez la colonne 'correspondance' et l'adresse "
+                        "DVF affichée."
+                    )
 
                 with st.expander("🔧 Diagnostic technique (cadastre / Cerema)"):
                     import json as _json
@@ -669,7 +697,14 @@ with tab_recherche:
                         fc1, fc2, fc3 = st.columns(3)
                         with fc1:
                             types_dispo_filtre = sorted(comparables["type_local"].dropna().unique())
-                            types_choisis = st.multiselect("Type de bien", types_dispo_filtre)
+                            type_bien_adresse = st.session_state.get("type_bien_adresse")
+                            defaut_type = (
+                                [type_bien_adresse]
+                                if type_bien_adresse in types_dispo_filtre else []
+                            )
+                            types_choisis = st.multiselect(
+                                "Type de bien", types_dispo_filtre, default=defaut_type,
+                            )
                         with fc2:
                             communes_dispo_filtre = sorted(comparables["nom_commune"].dropna().unique())
                             communes_choisies = st.multiselect("Commune", communes_dispo_filtre)
@@ -733,12 +768,6 @@ with tab_recherche:
                             cols_prix = st.columns(len(prix_par_type))
                             for col, (type_bien, prix_moy) in zip(cols_prix, prix_par_type.items()):
                                 col.metric(f"€/m² moyen — {type_bien}", f"{prix_moy:,.0f} €")
-                            if "Local commercial" not in prix_par_type and "Local industriel. commercial ou assimilé" not in prix_par_type:
-                                st.caption(
-                                    "ℹ️ Les locaux commerciaux ne sont pas suivis par cette "
-                                    "app pour l'instant (seuls maisons, appartements et "
-                                    "immeubles en bloc sont traités)."
-                                )
 
                         st.dataframe(comparables_filtres, use_container_width=True)
                         if len(comparables_filtres) < len(comparables):
