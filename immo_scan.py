@@ -60,7 +60,7 @@ VAL_DE_MARNE_HINT = (
     "Villejuif, Le Kremlin-Bicêtre, Choisy-le-Roi, Thiais, Bonneuil-sur-Marne, ..."
 )
 
-TYPES_RETENUS = ["Maison", "Appartement"]  # types_local bruts DVF exploités
+TYPES_RETENUS = ["Maison", "Appartement", "Local industriel. commercial ou assimilé"]  # types_local bruts DVF exploités
 
 
 def _normalize_text(value) -> str:
@@ -150,12 +150,17 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     # Une même mutation peut apparaître sur plusieurs lignes (dépendances,
     # plusieurs lots). On agrège au niveau de la mutation pour ne pas
     # sur-pondérer les biens à lots multiples dans le calcul du prix/m².
+    # `nb_lots` compte les LIGNES DVF (chaque lot a la sienne), pas les
+    # `id_parcelle` distincts : en copropriété, plusieurs lots (voire tous
+    # les types d'un immeuble mixte) partagent souvent le même id_parcelle
+    # — nunique(id_parcelle) sous-compterait alors une vente de 8
+    # appartements comme "1 lot".
     agg = (
         df.groupby(["id_mutation", "date_mutation", "nom_commune", "code_postal",
                      "code_commune", "type_local", "annee", "valeur_fonciere"],
                     as_index=False)
           .agg(surface_reelle_bati=("surface_reelle_bati", "sum"),
-               nb_lots=("id_parcelle", "nunique"),
+               nb_lots=("id_parcelle", "size"),
                id_parcelle=("id_parcelle", "first"),
                adresse_nom_voie=("adresse_nom_voie", "first"),
                adresse_numero=("adresse_numero", "first"),
@@ -164,21 +169,84 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     )
     agg = agg[agg["surface_reelle_bati"] > 8]
     agg["prix_m2"] = agg["valeur_fonciere"] / agg["surface_reelle_bati"]
-    # On retire les valeurs aberrantes (erreurs de saisie DVF fréquentes)
-    agg = agg[(agg["prix_m2"] > 500) & (agg["prix_m2"] < 25_000)]
+    # On retire les valeurs aberrantes (erreurs de saisie DVF fréquentes).
+    # Seuil élargi pour les locaux commerciaux, dont la distribution de
+    # prix/m² diffère beaucoup du résidentiel (entrepôt bon marché à
+    # boutique en pied d'immeuble très chère) — même logique que côté
+    # Cerema DVF+ (_clean_cerema_dataframe).
+    est_commercial = agg["type_local"] == "Local industriel. commercial ou assimilé"
+    seuil_bas = est_commercial.map({True: 100, False: 500})
+    seuil_haut = est_commercial.map({True: 40_000, False: 25_000})
+    agg = agg[(agg["prix_m2"] > seuil_bas) & (agg["prix_m2"] < seuil_haut)]
     return agg
 
 
-def reconstruct_buildings(agg: pd.DataFrame) -> pd.DataFrame:
+def reconstruct_buildings(agg: pd.DataFrame) -> tuple[pd.DataFrame, set]:
     """
-    Isole les mutations correspondant probablement à une vente d'immeuble
-    en bloc : plusieurs lots "Appartement" vendus sous le même id_mutation,
-    au même prix total. Approximation à affiner avec le champ 'nombre_lots'
-    du fichier source si besoin d'une précision supérieure.
+    Isole les mutations correspondant probablement à une vente en bloc :
+    soit plusieurs lots d'un même type (ex. 8 appartements) sous le même
+    id_mutation, soit une mutation MÊLANT plusieurs types de biens (ex.
+    appartements + local commercial dans le même immeuble). Dans les deux
+    cas, on reconstitue UNE seule ligne "Immeuble (vente en bloc, estimé)"
+    au lieu de laisser coexister une ligne par type — car ces sous-lignes
+    partagent toutes le même `valeur_fonciere` (le prix total de l'acte,
+    répété tel quel sur chaque ligne DVF source), et diviser ce prix total
+    par la seule surface d'UNE composante (juste les appartements, ou juste
+    le commerce) surestime son prix/m² à elle seule.
+
+    Une colonne `composition` détaille le nombre de lots par type d'origine
+    et leur surface (ex. "8 Appartement (612 m²), 1 Local industriel.
+    commercial ou assimilé (95 m²)"), pour ne pas perdre cette information
+    dans l'historique/les comparables affichés.
+
+    Retourne (immeubles, ids_mutation_reconstruites) — le second élément
+    liste les `id_mutation` concernées, pour que l'appelant (run_reference)
+    retire les sous-lignes par type d'origine de `agg` et évite de les
+    compter deux fois.
     """
-    immeubles = agg[(agg["type_local"] == "Appartement") & (agg["nb_lots"] >= 2)].copy()
-    immeubles["type_local"] = "Immeuble (vente en bloc, estimé)"
-    return immeubles
+    lignes = []
+    ids_reconstruits = set()
+
+    for id_mut, groupe in agg.groupby("id_mutation"):
+        nb_lots_total = groupe["nb_lots"].sum()
+        types_distincts = groupe["type_local"].nunique()
+        if types_distincts < 2 and nb_lots_total < 2:
+            continue  # mutation simple, un seul bien : rien à reconstituer
+
+        ids_reconstruits.add(id_mut)
+        base = groupe.iloc[0]
+        surface_totale = groupe["surface_reelle_bati"].sum()
+        valeur = base["valeur_fonciere"]  # identique sur toutes les sous-lignes source
+        composition = ", ".join(
+            f"{int(r.nb_lots)} {r.type_local} ({r.surface_reelle_bati:.0f} m²)"
+            for r in groupe.itertuples()
+        )
+        lignes.append({
+            "id_mutation": id_mut,
+            "date_mutation": base["date_mutation"],
+            "nom_commune": base["nom_commune"],
+            "code_postal": base["code_postal"],
+            "code_commune": base["code_commune"],
+            "type_local": "Immeuble (vente en bloc, estimé)",
+            "annee": base["annee"],
+            "valeur_fonciere": valeur,
+            "surface_reelle_bati": surface_totale,
+            "nb_lots": int(nb_lots_total),
+            "id_parcelle": base["id_parcelle"],
+            "adresse_nom_voie": base["adresse_nom_voie"],
+            "adresse_numero": base["adresse_numero"],
+            "longitude": base["longitude"],
+            "latitude": base["latitude"],
+            "prix_m2": (valeur / surface_totale) if surface_totale else None,
+            "composition": composition,
+        })
+
+    immeubles = pd.DataFrame(lignes)
+    if not immeubles.empty:
+        immeubles = immeubles[
+            (immeubles["prix_m2"] > 500) & (immeubles["prix_m2"] < 40_000)
+        ]
+    return immeubles, ids_reconstruits
 
 
 # ----------------------------------------------------------------------------
@@ -307,8 +375,9 @@ def run_reference(dept: str, years: list[int]) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     df = load_all(dept, years)
     agg = clean(df)
-    immeubles = reconstruct_buildings(agg)
-    full = pd.concat([agg, immeubles], ignore_index=True)
+    immeubles, ids_reconstruits = reconstruct_buildings(agg)
+    agg_restante = agg[~agg["id_mutation"].isin(ids_reconstruits)]
+    full = pd.concat([agg_restante, immeubles], ignore_index=True)
 
     ref = build_reference(full)
     trend = build_trend(full)
@@ -855,6 +924,8 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
 
     cols = ["nom_commune", "type_local", "date_mutation", "valeur_fonciere",
             "surface_reelle_bati", "prix_m2", "distance_m", "source"]
+    if "composition" in proches.columns:
+        cols.append("composition")
     # adresse_numero/adresse_nom_voie n'existent pas côté Cerema (source sans
     # champ adresse, seulement des identifiants de parcelle — voir README).
     # On uniformise TOUTE la colonne en texte (pas seulement les lignes
@@ -1125,6 +1196,8 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
     cols = ["date_mutation", "adresse_dvf", "nom_commune", "type_local",
             "valeur_fonciere", "surface_reelle_bati", "prix_m2",
             "nb_lots", "correspondance", "source"]
+    if "composition" in result.columns:
+        cols.append("composition")
     if "id_parcelle" in result.columns:
         cols.append("id_parcelle")
     return result[cols].head(max_results)
