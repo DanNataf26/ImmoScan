@@ -480,10 +480,26 @@ with tab_recherche:
                                     f"{core.RNB_API_URL}/address/",
                                     params={"q": geo["label"]}, timeout=10,
                                 )
+                                _data_rnb1 = _resp_rnb1.json()
                                 st.write(f"**RNB étape 1 — code HTTP : {_resp_rnb1.status_code}**")
-                                st.json(_resp_rnb1.json())
+                                st.json(_data_rnb1)
                             except Exception as exc:
+                                _data_rnb1 = None
                                 st.error(f"Exception RNB étape 1 : {type(exc).__name__}: {exc}")
+
+                        if _data_rnb1 and _data_rnb1.get("results"):
+                            st.write(f"**RNB étape 2 — parcelles pour chaque bâtiment candidat :**")
+                            for i, bat in enumerate(_data_rnb1["results"]):
+                                rnb_id = bat.get("rnb_id")
+                                try:
+                                    _resp_rnb2 = _requests.get(
+                                        f"{core.RNB_API_URL}/{rnb_id}/",
+                                        params={"plots": 1}, timeout=10,
+                                    )
+                                    st.write(f"Bâtiment {i} (`{rnb_id}`) — code HTTP : {_resp_rnb2.status_code}")
+                                    st.json(_resp_rnb2.json())
+                                except Exception as exc:
+                                    st.error(f"Exception RNB étape 2 (bâtiment {i}) : {type(exc).__name__}: {exc}")
 
                         with st.spinner("Test en direct : RNB (complet) puis GPS si besoin..."):
                             try:
