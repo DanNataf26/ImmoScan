@@ -463,7 +463,7 @@ with tab_recherche:
                     with st.spinner("Recherche de l'historique (et, si besoin, du cadastre)..."):
                         history = core.find_property_history(
                             active_dept, geo["label"], geo["latitude"], geo["longitude"],
-                            commune=geo.get("commune"),
+                            commune=geo.get("commune"), code_insee=geo.get("code_insee"),
                         )
                     st.session_state["history_cache_key"] = geo["label"]
                     st.session_state["history_cache_result"] = history
@@ -541,7 +541,7 @@ with tab_recherche:
                                 else:
                                     sec = str(diag_parcelle.get("section") or "").lstrip("0").upper()
                                     num = str(diag_parcelle.get("numero") or "").lstrip("0")
-                                    code_insee_cible = str(diag_parcelle.get("code_insee") or "").strip()
+                                    code_insee_cible = str(geo.get("code_insee") or diag_parcelle.get("code_insee") or "").strip()
                                     diag_cerema = diag_cerema.copy()
                                     diag_cerema["_section"] = diag_cerema["id_parcelle"].astype(str).str[8:10].str.lstrip("0").str.upper()
                                     diag_cerema["_numero"] = diag_cerema["id_parcelle"].astype(str).str[10:14].str.lstrip("0")

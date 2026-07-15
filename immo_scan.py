@@ -949,7 +949,8 @@ def _parse_address_number_street(address: str) -> tuple[str, str]:
 
 
 def find_property_history(dept: str, address: str, lat: float, lon: float,
-                          commune: str | None = None, max_results: int = 30) -> pd.DataFrame:
+                          commune: str | None = None, max_results: int = 30,
+                          code_insee: str | None = None) -> pd.DataFrame:
     """
     Récupère l'historique DVF du bien précis recherché (ce numéro, cette rue,
     cette commune), sur TOUTE la période chargée en cache (pas de limite de
@@ -962,6 +963,12 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
     donc un critère obligatoire, pas seulement indicatif. En copropriété,
     plusieurs lots peuvent partager le même numéro — toutes les lignes
     correspondantes sont alors montrées, à vérifier manuellement.
+
+    `code_insee`, si fourni (typiquement depuis le géocodage BAN de
+    l'adresse, réputé fiable), est utilisé en priorité pour filtrer par
+    commune dans le repli cadastre/Cerema — les API cadastre elles-mêmes se
+    sont montrées peu fiables sur ce champ précis en conditions réelles
+    (absent ou tronqué selon les services).
 
     Si aucune correspondance exacte n'est trouvée, un repli de proximité très
     étroit (30 m) est tenté et clairement signalé comme approximatif.
@@ -1074,7 +1081,7 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
                 p = parcelle_info["parcelles"][0]
                 sec = str(p.get("section") or "").lstrip("0").upper()
                 num = str(p.get("numero") or "").lstrip("0")
-                code_insee_cible = str(p.get("code_insee") or "").strip()
+                code_insee_cible = str(code_insee or p.get("code_insee") or "").strip()
                 hist_cerema = (
                     cerema[
                         (cerema["_section"] == sec) & (cerema["_numero"] == num)
