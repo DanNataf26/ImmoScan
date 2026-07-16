@@ -1007,9 +1007,19 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
     }
 
     if tri == "date":
+        # Le DVF récent (2021+) est par construction toujours plus récent
+        # que Cerema DVF+ (borné à 2020) : ce tri fait donc déjà naturellement
+        # remonter le DVF en premier, sans besoin de traitement particulier.
         proches = proches_complet.sort_values("date_mutation", ascending=False)
     else:
-        proches = proches_complet.sort_values("distance_m")
+        # Priorité au DVF récent sur Cerema DVF+ à distance égale : Cerema
+        # est souvent plus dense localement (7 ans d'historique 2014-2020
+        # contre quelques années de DVF récent), et un tri par distance pur
+        # le ferait dominer la troncature à `max_results` alors que le DVF
+        # récent est plus représentatif du marché actuel.
+        proches_complet = proches_complet.copy()
+        proches_complet["_cerema"] = proches_complet["source"].astype(str).str.startswith("Cerema")
+        proches = proches_complet.sort_values(["_cerema", "distance_m"]).drop(columns=["_cerema"])
 
     cols = ["nom_commune", "type_local", "date_mutation", "valeur_fonciere",
             "surface_reelle_bati", "prix_m2", "distance_m", "source"]
@@ -1058,10 +1068,25 @@ def find_comparables_auto(dept: str, lat: float, lon: float, type_local: str | N
 
     `include_vefa` (faux par défaut) : voir find_comparables().
 
+    L'élargissement se base sur le nombre de résultats **DVF (2021+/VEFA)**
+    trouvés, PAS sur le total combiné avec Cerema DVF+ : sinon, un volume
+    Cerema abondant à proximité (2014-2020, souvent plus dense que quelques
+    années de DVF récent) satisferait `cible_min` à lui seul et arrêterait
+    l'élargissement avant que le DVF récent — plus représentatif du marché
+    actuel — n'ait sa chance d'être exploré plus loin. Cerema reste malgré
+    tout inclus dans le résultat final dès qu'il y en a (voir
+    find_comparables), en complément, pas à la place du DVF récent.
+
     Retourne un dict : {df, resume, radius_final, since_years_final, elargi}
     — `elargi` indique si les paramètres initiaux ont dû être dépassés,
     pour que l'app puisse en informer clairement l'utilisateur.
     """
+    def _nb_dvf(resume):
+        return sum(
+            n for src, n in resume["total_par_source"].items()
+            if not str(src).startswith("Cerema")
+        )
+
     paliers_radius = sorted(set([radius_m, 250, 500, 1000]))
     paliers_radius = [r for r in paliers_radius if r >= radius_m]
     paliers_annees = sorted(set([since_years, 10, 15]))
@@ -1072,23 +1097,23 @@ def find_comparables_auto(dept: str, lat: float, lon: float, type_local: str | N
                                     since_years, include_cerema, tri,
                                     include_vefa=include_vefa)
 
-    if resume["total"] < cible_min:
+    if _nb_dvf(resume) < cible_min:
         for r in paliers_radius[1:]:
             df, resume = find_comparables(dept, lat, lon, type_local, r, max_results,
                                             since_years, include_cerema, tri,
                                             include_vefa=include_vefa)
             radius_final = r
-            if resume["total"] >= cible_min:
+            if _nb_dvf(resume) >= cible_min:
                 break
 
     since_years_final = since_years
-    if resume["total"] < cible_min:
+    if _nb_dvf(resume) < cible_min:
         for a in paliers_annees[1:]:
             df, resume = find_comparables(dept, lat, lon, type_local, radius_final, max_results,
                                             a, include_cerema, tri,
                                             include_vefa=include_vefa)
             since_years_final = a
-            if resume["total"] >= cible_min:
+            if _nb_dvf(resume) >= cible_min:
                 break
 
     elargi = (radius_final != radius_m) or (since_years_final != since_years)
