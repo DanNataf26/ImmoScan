@@ -8,6 +8,7 @@ basé sur les transactions DVF, avec géolocalisation, historique probable,
 comparables, DPE et vues cartographiques.
 """
 
+import math
 import sys
 from pathlib import Path
 
@@ -688,7 +689,13 @@ with tab_recherche:
 
             st.subheader("Ventes comparables à proximité")
             try:
-                with st.expander("⚙️ Réglages et filtres", expanded=False):
+                with st.expander("🔍 Paramètres de la recherche", expanded=False):
+                    st.caption(
+                        "Ces réglages relancent une vraie recherche (avec "
+                        "élargissement automatique du rayon/de la période si "
+                        "besoin) — à distinguer des filtres d'affichage ci-dessous, "
+                        "qui ne font que trier ce qui a déjà été trouvé."
+                    )
                     col_radius, col_years = st.columns(2)
                     with col_radius:
                         radius_comparables = st.slider(
@@ -699,7 +706,14 @@ with tab_recherche:
 
                     col_nb, col_tri = st.columns(2)
                     with col_nb:
-                        max_comparables = st.slider("Nombre affiché", 5, 100, 15, step=5)
+                        max_comparables = st.slider(
+                            "Nombre cible de résultats", 5, 100, 15, step=5,
+                            help="Détermine à la fois combien de lignes s'affichent "
+                                 "ET jusqu'où la recherche élargit automatiquement le "
+                                 "rayon/la période si elle n'en trouve pas assez près "
+                                 "— une valeur élevée peut donc ramener des ventes "
+                                 "bien au-delà du rayon affiché ci-dessus.",
+                        )
                     with col_tri:
                         tri_label = st.selectbox(
                             "Trier par",
@@ -714,45 +728,48 @@ with tab_recherche:
                              "pas directement comparable à une revente ancienne — exclu par défaut.",
                     )
 
-                    # Si une sélection canonique unique existe déjà (venant de
-                    # "Historique probable" ou d'un choix précédent ici), on la
-                    # passe directement à la recherche : elle élargit alors
-                    # rayon/période spécifiquement pour CE type (comme le fait
-                    # "Historique probable"), au lieu de filtrer après coup un
-                    # petit échantillon tous-types-confondus qui peut ne
-                    # contenir aucun résultat du type recherché s'il est rare
-                    # localement.
-                    canon_avant_recherche = st.session_state.get("types_bien_selection", [])
-                    type_local_recherche = (
-                        canon_avant_recherche[0] if len(canon_avant_recherche) == 1 else None
+                # Si une sélection canonique unique existe déjà (venant de
+                # "Historique probable" ou d'un choix précédent ici), on la
+                # passe directement à la recherche : elle élargit alors
+                # rayon/période spécifiquement pour CE type (comme le fait
+                # "Historique probable"), au lieu de filtrer après coup un
+                # petit échantillon tous-types-confondus qui peut ne
+                # contenir aucun résultat du type recherché s'il est rare
+                # localement.
+                canon_avant_recherche = st.session_state.get("types_bien_selection", [])
+                type_local_recherche = (
+                    canon_avant_recherche[0] if len(canon_avant_recherche) == 1 else None
+                )
+
+                resultat_auto = core.find_comparables_auto(
+                    active_dept, geo["latitude"], geo["longitude"],
+                    type_local=type_local_recherche,
+                    radius_m=radius_comparables, since_years=since_years,
+                    max_results=max_comparables, tri=tri_comparables,
+                    cible_min=max_comparables,
+                    include_vefa=include_vefa_comparables,
+                )
+                comparables = resultat_auto["df"]
+                resume_comparables = resultat_auto["resume"]
+                radius_utilise = resultat_auto["radius_final"]
+                since_years_utilise = resultat_auto["since_years_final"]
+
+                if type_local_recherche:
+                    st.caption(
+                        f"🎯 Recherche ciblée sur le type « {type_local_recherche} » "
+                        "(présélectionné depuis l'historique de cette adresse) — "
+                        "décochez le filtre dans la recherche ci-dessus pour "
+                        "élargir à tous les types."
                     )
 
-                    resultat_auto = core.find_comparables_auto(
-                        active_dept, geo["latitude"], geo["longitude"],
-                        type_local=type_local_recherche,
-                        radius_m=radius_comparables, since_years=since_years,
-                        max_results=max_comparables, tri=tri_comparables,
-                        cible_min=max_comparables,
-                        include_vefa=include_vefa_comparables,
-                    )
-                    comparables = resultat_auto["df"]
-                    resume_comparables = resultat_auto["resume"]
-                    radius_utilise = resultat_auto["radius_final"]
-                    since_years_utilise = resultat_auto["since_years_final"]
-
-                    if type_local_recherche:
+                if comparables.empty:
+                    comparables_filtres = comparables
+                else:
+                    with st.expander("🎛️ Filtrer les résultats affichés", expanded=False):
                         st.caption(
-                            f"🎯 Recherche ciblée sur le type « {type_local_recherche} » "
-                            "(présélectionné depuis l'historique de cette adresse) — "
-                            "décochez le filtre ci-dessous pour élargir à tous les types."
+                            "Laissez un champ vide pour ne pas filtrer dessus "
+                            "(tout est affiché par défaut)."
                         )
-
-                    if comparables.empty:
-                        comparables_filtres = comparables
-                    else:
-                        st.divider()
-                        st.markdown("**Filtrer le tableau affiché ci-dessous**")
-                        st.caption("Laissez un champ vide pour ne pas filtrer dessus (tout est affiché par défaut).")
                         fc1, fc2, fc3 = st.columns(3)
                         with fc1:
                             types_dispo_filtre = sorted(comparables["type_local"].dropna().unique())
@@ -780,16 +797,96 @@ with tab_recherche:
                         with fc3:
                             sources_dispo_filtre = sorted(comparables["source"].dropna().unique())
                             sources_choisies = st.multiselect("Source", sources_dispo_filtre)
-                        prix_min = float(comparables["prix_m2"].min())
-                        prix_max = float(comparables["prix_m2"].max())
-                        if prix_max > prix_min:
-                            plage_prix = st.slider(
-                                "Prix/m² (€)", prix_min, prix_max, (prix_min, prix_max),
+
+                        def _pas_lisible(etendue):
+                            """Choisit un pas d'arrondi 'joli' (1/2/5 x 10^n) adapté
+                            à l'étendue d'une plage, pour des bornes de slider
+                            lisibles plutôt que des décimales brutes."""
+                            if etendue <= 0:
+                                return 1
+                            magnitude = 10 ** math.floor(math.log10(etendue))
+                            for mult in (1, 2, 5, 10):
+                                if etendue / (magnitude * mult) <= 20:
+                                    return magnitude * mult
+                            return magnitude * 10
+
+                        def _bornes_arrondies(vmin, vmax):
+                            pas = _pas_lisible(vmax - vmin)
+                            bas = math.floor(vmin / pas) * pas
+                            haut = math.ceil(vmax / pas) * pas
+                            if haut <= bas:
+                                haut = bas + pas
+                            return bas, haut, pas
+
+                        fc4, fc5 = st.columns(2)
+                        with fc4:
+                            prix_min_brut = float(comparables["prix_m2"].min())
+                            prix_max_brut = float(comparables["prix_m2"].max())
+                            if prix_max_brut > prix_min_brut:
+                                prix_bas, prix_haut, pas_prix = _bornes_arrondies(
+                                    prix_min_brut, prix_max_brut)
+                                plage_prix = st.slider(
+                                    "Prix/m² (€)", prix_bas, prix_haut,
+                                    (prix_bas, prix_haut), step=float(pas_prix),
+                                )
+                            else:
+                                plage_prix = (prix_min_brut, prix_max_brut)
+                        with fc5:
+                            total_min_brut = float(comparables["valeur_fonciere"].min())
+                            total_max_brut = float(comparables["valeur_fonciere"].max())
+                            if total_max_brut > total_min_brut:
+                                total_bas, total_haut, pas_total = _bornes_arrondies(
+                                    total_min_brut, total_max_brut)
+                                plage_prix_total = st.slider(
+                                    "Prix total (€)", total_bas, total_haut,
+                                    (total_bas, total_haut), step=float(pas_total),
+                                )
+                            else:
+                                plage_prix_total = (total_min_brut, total_max_brut)
+
+                        if "surface_reelle_bati" in comparables.columns:
+                            surf_min_brut = float(comparables["surface_reelle_bati"].min())
+                            surf_max_brut = float(comparables["surface_reelle_bati"].max())
+                            if surf_max_brut > surf_min_brut:
+                                surf_bas, surf_haut, pas_surf = _bornes_arrondies(
+                                    surf_min_brut, surf_max_brut)
+                                plage_surface = st.slider(
+                                    "Surface (m²)", surf_bas, surf_haut,
+                                    (surf_bas, surf_haut), step=float(pas_surf),
+                                )
+                            else:
+                                plage_surface = (surf_min_brut, surf_max_brut)
+                        else:
+                            plage_surface = None
+
+                        pieces_dispo = (
+                            comparables["nombre_pieces_principales"].dropna()
+                            if "nombre_pieces_principales" in comparables.columns
+                            else pd.Series(dtype=float)
+                        )
+                        if not pieces_dispo.empty and pieces_dispo.max() > pieces_dispo.min():
+                            p_bas, p_haut = int(pieces_dispo.min()), int(pieces_dispo.max())
+                            plage_pieces = st.slider(
+                                "Nombre de pièces", p_bas, p_haut, (p_bas, p_haut),
+                                help="Absent pour les ventes Cerema DVF+ (2014-2020), "
+                                     "qui ne portent pas cette information — ces lignes "
+                                     "restent affichées quel que soit ce filtre.",
                             )
                         else:
-                            plage_prix = (prix_min, prix_max)
+                            plage_pieces = None
 
                         masque = comparables["prix_m2"].between(plage_prix[0], plage_prix[1])
+                        masque &= comparables["valeur_fonciere"].between(
+                            plage_prix_total[0], plage_prix_total[1])
+                        if plage_surface is not None:
+                            masque &= comparables["surface_reelle_bati"].between(
+                                plage_surface[0], plage_surface[1])
+                        if plage_pieces is not None:
+                            masque &= (
+                                comparables["nombre_pieces_principales"].isna()
+                                | comparables["nombre_pieces_principales"].between(
+                                    plage_pieces[0], plage_pieces[1])
+                            )
                         if types_choisis:
                             masque &= comparables["type_local"].isin(types_choisis)
                         if communes_choisies:

@@ -185,6 +185,7 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
                nb_lots=("id_parcelle", "size"),
                doublon_suspect=("_doublon_suspect", "max"),
                vefa=("_vefa", "max"),
+               nombre_pieces_principales=("nombre_pieces_principales", "sum"),
                id_parcelle=("id_parcelle", "first"),
                adresse_nom_voie=("adresse_nom_voie", "first"),
                adresse_numero=("adresse_numero", "first"),
@@ -272,6 +273,7 @@ def reconstruct_buildings(agg: pd.DataFrame) -> tuple[pd.DataFrame, set]:
             "valeur_fonciere": valeur,
             "surface_reelle_bati": surface_totale,
             "nb_lots": int(nb_lots_total),
+            "nombre_pieces_principales": groupe["nombre_pieces_principales"].sum(),
             "vefa": bool(groupe["vefa"].any()),
             "id_parcelle": base["id_parcelle"],
             "adresse_nom_voie": base["adresse_nom_voie"],
@@ -1002,6 +1004,8 @@ def find_comparables(dept: str, lat: float, lon: float, type_local: str | None =
 
     cols = ["nom_commune", "type_local", "date_mutation", "valeur_fonciere",
             "surface_reelle_bati", "prix_m2", "distance_m", "source"]
+    if "nombre_pieces_principales" in proches.columns:
+        cols.append("nombre_pieces_principales")
     if "composition" in proches.columns:
         cols.append("composition")
     # adresse_numero/adresse_nom_voie n'existent pas côté Cerema (source sans
@@ -1292,6 +1296,8 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
     cols = ["date_mutation", "adresse_dvf", "nom_commune", "type_local",
             "valeur_fonciere", "surface_reelle_bati", "prix_m2",
             "nb_lots", "correspondance", "source"]
+    if "nombre_pieces_principales" in result.columns:
+        cols.append("nombre_pieces_principales")
     if "composition" in result.columns:
         cols.append("composition")
     if "id_parcelle" in result.columns:
