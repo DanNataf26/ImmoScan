@@ -53,11 +53,19 @@
     // sélection (liste de suggestions effacée mais cadre non réduit).
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        const height = document.documentElement.scrollHeight;
-        _sendMessage(SET_FRAME_HEIGHT, { height: height + 6 });
+        const height = document.documentElement.scrollHeight + 6;
+        // Ne renvoyer que si la hauteur a réellement changé : sans ça, un
+        // redimensionnement de l'iframe par Streamlit peut lui-même
+        // déclencher un évènement (mutation, resize) qui rappelle cette
+        // fonction, qui renvoie la même valeur, qui redéclenche l'évènement...
+        // une boucle de rétroaction qui fait grossir le cadre en continu.
+        if (height === lastSentHeight) return;
+        lastSentHeight = height;
+        _sendMessage(SET_FRAME_HEIGHT, { height: height });
       });
     });
   }
+  let lastSentHeight = null;
 
   function notifyHost(value) {
     _sendMessage(SET_COMPONENT_VALUE, { value: value, dataType: "json" });
@@ -70,7 +78,6 @@
   });
   _sendMessage(COMPONENT_READY, { apiVersion: 1 });
   window.addEventListener("load", () => window.setTimeout(setFrameHeight, 0));
-  window.addEventListener("resize", setFrameHeight);
 
   // Filet de sécurité : les appels explicites à setFrameHeight() ci-dessous
   // couvrent les cas prévus (saisie, résultats, sélection), mais un cas non
@@ -78,6 +85,8 @@
   // virtuel modifiant la mise en page, etc.) pourrait laisser le cadre à
   // une taille périmée. Un MutationObserver réagit à TOUT changement du DOM
   // du composant, quelle qu'en soit la cause, sans avoir à les énumérer.
+  // Pas d'écouteur "resize" ici volontairement : redimensionner l'iframe
+  // déclenche un resize DE CETTE MÊME iframe, ce qui créerait une boucle.
   new MutationObserver(() => setFrameHeight()).observe(
     document.getElementById("wrapper"),
     { childList: true, subtree: true, characterData: true }
