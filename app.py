@@ -1116,10 +1116,21 @@ with tab_recherche:
                     _rapport_bdnb.append("Aucun code_insee disponible — recherche impossible.")
                 else:
                     target_numero, target_rue = core._parse_address_number_street(geo["label"])
+                    _mots_generiques_diag = {
+                        "rue", "avenue", "boulevard", "chemin", "impasse", "allee",
+                        "place", "square", "route", "sentier", "quai", "cours",
+                        "villa", "cite", "passage", "voie", "chaussee",
+                    }
+                    _tokens_rue_diag = [t for t in target_rue.split() if len(t) > 2]
+                    _tokens_distinctifs_diag = (
+                        [t for t in _tokens_rue_diag if t not in _mots_generiques_diag]
+                        or _tokens_rue_diag
+                    )
+                    mot_pivot_diag = max(_tokens_distinctifs_diag, key=len) if _tokens_distinctifs_diag else ""
                     url_diag = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet"
                     params_diag = {
                         "code_commune_insee": f"eq.{geo['code_insee']}",
-                        "libelle_adr_principale_ban": f"ilike.*{target_numero}*",
+                        "libelle_adr_principale_ban": f"ilike.*{target_numero}*{mot_pivot_diag}*",
                         "select": (
                             "batiment_groupe_id,annee_construction,"
                             "libelle_adr_principale_ban,l_libelle_adr,l_parcelle_id"
@@ -1129,19 +1140,19 @@ with tab_recherche:
                     st.write(f"URL : {url_diag}")
                     st.write(
                         f"Filtre : code_commune_insee=eq.{geo['code_insee']} "
-                        f"ET libelle_adr_principale_ban=ilike.*{target_numero}*"
+                        f"ET libelle_adr_principale_ban=ilike.*{target_numero}*{mot_pivot_diag}*"
                     )
                     st.caption(
-                        "Le filtre par commune seule plafonnait à ~10 résultats "
-                        "quel que soit le `limit` demandé (constaté sur Maisons-"
-                        "Alfort, qui compte pourtant des milliers de bâtiments) — "
-                        "le numéro de rue est donc filtré côté serveur en plus, "
-                        "pour rester sous ce plafond silencieux."
+                        "10 résultats semble être un plafond serveur strict, quel "
+                        "que soit le filtre appliqué (constaté même filtré sur "
+                        "commune + numéro seul, sur Maisons-Alfort) — le mot le "
+                        "plus distinctif du nom de rue est donc filtré côté "
+                        "serveur en plus, pour rester sous ce plafond."
                     )
                     _rapport_bdnb += [
                         f"URL : {url_diag}",
                         f"Filtre : code_commune_insee=eq.{geo['code_insee']} "
-                        f"ET libelle_adr_principale_ban=ilike.*{target_numero}*",
+                        f"ET libelle_adr_principale_ban=ilike.*{target_numero}*{mot_pivot_diag}*",
                     ]
                     try:
                         reponse_diag = _requests_diag.get(url_diag, params=params_diag, timeout=15)

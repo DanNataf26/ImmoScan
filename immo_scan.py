@@ -1973,22 +1973,30 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
     - sa géométrie (`geom_groupe`) est en Lambert93 (EPSG:2154), pas en
       latitude/longitude WGS84 : une recherche par proximité GPS directe
       n'est de toute façon pas possible sans reprojection
-    - un filtre par seule commune (`code_commune_insee=eq.X`) ne renvoie
-      qu'une dizaine de résultats quel que soit le `limit` demandé — la
-      commune entière de Maisons-Alfort (94046), qui compte des milliers de
-      bâtiments, n'en a renvoyé que 10 : plafond serveur silencieux,
-      indépendant du paramètre `limit`. Récupérer toute une commune puis
-      filtrer côté client ne fonctionne donc pas.
+    - **10 résultats semble être un plafond serveur strict, quel que soit
+      le filtre appliqué** (constaté aussi bien sans filtre que filtré sur
+      commune + numéro seul) — pas juste une limite par défaut sur requête
+      non filtrée. Filtrer sur le numéro seul ne suffit donc pas si plus de
+      10 bâtiments de la commune contiennent ce numéro (fréquent, plusieurs
+      rues ayant le même numéro) : le bon bâtiment peut être présent mais
+      hors des 10 premiers renvoyés, dans un ordre par ailleurs arbitraire.
 
-    Le filtre est par conséquent poussé côté serveur : `code_commune_insee`
-    ET un `ilike` sur `libelle_adr_principale_ban` restreint au numéro de
-    rue recherché (les chiffres ne posent pas de problème d'accents,
-    contrairement au nom de rue) — ça réduit fortement le volume avant même
-    de recevoir la réponse. La correspondance fine (numéro exact + mots du
-    nom de rue) se fait ensuite côté client sur ce petit lot de résultats,
-    même principe que pour le DVF (voir find_property_history).
+    Le filtre pousse donc côté serveur le numéro ET le mot le plus distinctif
+    du nom de rue (le plus long, hors mots génériques comme "rue"/"avenue"),
+    pour réduire autant que possible le lot sous ce plafond. La correspondance
+    fine (numéro exact + tous les mots du nom de rue) se fait ensuite côté
+    client sur ce petit lot, même principe que pour le DVF (voir
+    find_property_history). Si le bâtiment n'est toujours pas dans le lot
+    malgré ce filtre resserré, la fonction ne peut pas le trouver — limite
+    du niveau d'accès gratuit de cette API, pas un bug du code.
     """
     import requests
+
+    MOTS_GENERIQUES_BDNB = {
+        "rue", "avenue", "boulevard", "chemin", "impasse", "allee", "place",
+        "square", "route", "sentier", "quai", "cours", "villa", "cite",
+        "passage", "voie", "chaussee",
+    }
 
     if not code_insee:
         return None
@@ -1998,13 +2006,15 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
     rue_tokens = [t for t in target_rue.split() if len(t) > 2]
     if not rue_tokens:
         return None
+    tokens_distinctifs = [t for t in rue_tokens if t not in MOTS_GENERIQUES_BDNB] or rue_tokens
+    mot_pivot = max(tokens_distinctifs, key=len)
 
     try:
         resp = requests.get(
             "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet",
             params={
                 "code_commune_insee": f"eq.{code_insee}",
-                "libelle_adr_principale_ban": f"ilike.*{target_numero}*",
+                "libelle_adr_principale_ban": f"ilike.*{target_numero}*{mot_pivot}*",
                 "select": (
                     "batiment_groupe_id,annee_construction,"
                     "libelle_adr_principale_ban,l_libelle_adr,l_parcelle_id"
