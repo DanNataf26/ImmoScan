@@ -2054,6 +2054,49 @@ def interpret_dpe_par_logement(dpe: pd.DataFrame | None) -> list[dict]:
     return entrees
 
 
+def construire_tableau_dpe(dpe: pd.DataFrame | None) -> tuple[pd.DataFrame | None, str | None]:
+    """
+    Réorganise le tableau DPE brut en mettant en premier les colonnes
+    essentielles pour distinguer un logement d'un autre dans un immeuble
+    collectif : classe énergie, classe GES, date du DPE, puis tout champ
+    de distinction du logement (étage, complément d'adresse...) — le reste
+    des colonnes brutes suit, inchangé. Ne renomme ni ne supprime aucune
+    colonne d'origine, se contente de réordonner pour la lisibilité — un
+    seul tableau plutôt qu'un résumé séparé du détail brut, pour que la
+    ligne d'un logement dans le résumé corresponde visuellement à la même
+    ligne dans le détail.
+
+    Retourne (tableau réordonné, nom de la colonne classe énergie) — le
+    second élément permet à l'appelant d'appliquer une couleur de fond sur
+    cette colonne précisément, sans avoir à redeviner son nom.
+    """
+    if dpe is None or dpe.empty:
+        return dpe, None
+
+    candidats_energie = ["etiquette_dpe", "classe_consommation_energie", "etiquette_dpe_final"]
+    candidats_ges = ["etiquette_ges", "classe_estimation_ges", "etiquette_ges_final"]
+    candidats_date = ["date_etablissement_dpe", "date_reception_dpe", "date_visite_diagnostiqueur"]
+    MOTS_CLES_DISTINCTION = [
+        "complement", "etage", "appartement", "logement", "cage",
+        "escalier", "porte", "batiment", "lot",
+    ]
+
+    col_energie = next((c for c in candidats_energie if c in dpe.columns), None)
+    col_ges = next((c for c in candidats_ges if c in dpe.columns), None)
+    col_date = next((c for c in candidats_date if c in dpe.columns), None)
+    deja_prioritaires = {col_energie, col_ges, col_date}
+    colonnes_distinction = [
+        c for c in dpe.columns
+        if any(mot in c.lower() for mot in MOTS_CLES_DISTINCTION)
+        and c not in ("nombre_appartement",)
+        and c not in deja_prioritaires
+    ]
+
+    colonnes_prioritaires = [c for c in [col_energie, col_ges, col_date] + colonnes_distinction if c]
+    autres_colonnes = [c for c in dpe.columns if c not in colonnes_prioritaires]
+    return dpe[colonnes_prioritaires + autres_colonnes], col_energie
+
+
 BDNB_API_URL = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet/bbox"
 
 
