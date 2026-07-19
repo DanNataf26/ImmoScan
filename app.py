@@ -1127,6 +1127,36 @@ with tab_recherche:
                         st.code(reponse_diag.text[:2000])
                 except _requests_diag.exceptions.RequestException as e:
                     st.error(f"Échec de l'appel réseau : {e}")
+
+                st.divider()
+                st.caption(
+                    "Second essai : le chemin '/bbox' semble ne plus exister "
+                    "dans le schéma actuel de l'API (l'erreur ci-dessus le "
+                    "confirme). On interroge ici la table de base "
+                    "directement, sans filtre géographique, juste pour voir "
+                    "les vrais noms de colonnes de ce millésime."
+                )
+                url_diag2 = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet"
+                try:
+                    reponse_diag2 = _requests_diag.get(
+                        url_diag2, params={"limit": 1}, timeout=15
+                    )
+                    st.write(f"Statut HTTP : {reponse_diag2.status_code}")
+                    st.write(f"URL réellement appelée : {reponse_diag2.url}")
+                    try:
+                        data_diag2 = reponse_diag2.json()
+                        if isinstance(data_diag2, list) and data_diag2:
+                            st.write("Champs disponibles (premier résultat) :")
+                            st.code(sorted(data_diag2[0].keys()))
+                            st.json(data_diag2[0])
+                        else:
+                            st.warning("Réponse vide ou de forme inattendue :")
+                            st.json(data_diag2)
+                    except ValueError:
+                        st.error("Réponse non-JSON :")
+                        st.code(reponse_diag2.text[:2000])
+                except _requests_diag.exceptions.RequestException as e:
+                    st.error(f"Échec de l'appel réseau : {e}")
         else:
             st.metric("Année de construction estimée", batiment["annee_construction"])
             st.caption(
