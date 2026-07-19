@@ -1235,7 +1235,15 @@ with tab_recherche:
 
         st.subheader("Année de construction (BDNB)")
         with st.spinner("Recherche BDNB..."):
-            batiment = core.get_batiment_bdnb(geo["label"], geo.get("code_insee"))
+            id_parcelle_pour_bdnb = None
+            if known_parcelle_ids:
+                id_parcelle_pour_bdnb = (
+                    known_parcelle_ids["code_insee"] + known_parcelle_ids["prefixe"]
+                    + known_parcelle_ids["section"] + known_parcelle_ids["numero"]
+                )
+            batiment = core.get_batiment_bdnb(
+                geo["label"], geo.get("code_insee"), id_parcelle_pour_bdnb,
+            )
         if batiment is None or not batiment.get("annee_construction"):
             st.caption(
                 "Année de construction non trouvée automatiquement pour ce "
@@ -1384,6 +1392,13 @@ with tab_recherche:
                 )
         else:
             b = batiment["brut"]
+            if batiment.get("trouve_par_parcelle"):
+                st.caption(
+                    "✅ Bâtiment identifié par parcelle cadastrale confirmée "
+                    "(DVF) plutôt que par texte d'adresse — fiable même pour "
+                    "un immeuble à plusieurs adresses valides (ex. immeuble "
+                    "d'angle)."
+                )
             if batiment.get("numero_approximatif"):
                 st.warning(
                     f"⚠️ Aucun bâtiment trouvé exactement au n°{batiment['numero_recherche']} "

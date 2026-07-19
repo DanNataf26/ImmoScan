@@ -2200,10 +2200,28 @@ def construire_tableau_dpe(dpe: pd.DataFrame | None) -> tuple[pd.DataFrame | Non
 BDNB_API_URL = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet/bbox"
 
 
-def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
+def get_batiment_bdnb(
+    address: str, code_insee: str | None, id_parcelle_connue: str | None = None,
+) -> dict | None:
     """
     Récupère la carte d'identité du bâtiment via l'API BDNB (Base de Données
     Nationale des Bâtiments, CSTB) — gratuite, sans clé.
+
+    `id_parcelle_connue` (l'identifiant DVF 14 caractères, si une
+    correspondance DVF exacte existe pour l'adresse — voir
+    find_property_history) est utilisé en PRIORITÉ ABSOLUE sur la
+    correspondance par texte d'adresse : un immeuble d'angle peut avoir DEUX
+    adresses valides (ex. "38 avenue Sainte-Marie" ET "52 avenue de
+    Ceinture" pour le même bien, à Créteil, confirmé en conditions réelles
+    le 20/07/2026) — le DVF les fait correctement pointer vers la même
+    mutation, mais la BDNB peut avoir DEUX fiches bâtiment distinctes (l'une
+    pour chaque adresse), sans lien entre elles pour l'une des deux. Chercher
+    par texte d'adresse retombe alors sur la mauvaise fiche selon l'adresse
+    tapée. La parcelle cadastrale, elle, est la même des deux côtés — la
+    recherche par `l_parcelle_id` (champ exposé par la BDNB) lève donc
+    l'ambiguïté avec certitude, quelle que soit l'adresse utilisée pour la
+    recherche. Repli sur la correspondance par texte si aucune parcelle
+    n'est fournie, ou si la BDNB ne la reconnaît pas.
 
     Confirmé en conditions réelles (millésime 2026-02.a, testé le
     19/07/2026) :
@@ -2361,8 +2379,39 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
         return []
 
     try:
-        candidats = _chercher_pour_numero(target_numero)
+        candidats = []
         numero_trouve = target_numero
+
+        # Priorité absolue : si on a la parcelle DVF confirmée pour cette
+        # adresse, chercher directement par parcelle lève toute ambiguïté
+        # d'adresse (immeuble d'angle à deux adresses valides, etc.) — voir
+        # docstring. `cs` est l'opérateur PostgREST "contient" pour un champ
+        # tableau ; non garanti si `l_parcelle_id` n'est pas un vrai tableau
+        # Postgres côté BDNB, d'où la bascule sur le texte en cas d'échec.
+        if id_parcelle_connue:
+            try:
+                resp_parcelle = requests.get(
+                    "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet",
+                    params={
+                        "code_commune_insee": f"eq.{code_insee}",
+                        "l_parcelle_id": f"cs.{{{id_parcelle_connue}}}",
+                        "select": ",".join(CHAMPS_UTILES_BDNB),
+                        "limit": 200,
+                    },
+                    timeout=15,
+                )
+                resp_parcelle.raise_for_status()
+                candidats_parcelle = resp_parcelle.json()
+                if isinstance(candidats_parcelle, list) and candidats_parcelle:
+                    candidats = candidats_parcelle
+            except Exception:
+                pass  # on retombe silencieusement sur la recherche par texte
+
+        if not candidats:
+            candidats = _chercher_pour_numero(target_numero)
+            trouve_par_parcelle = False
+        else:
+            trouve_par_parcelle = True
 
         # Repli sur les numéros voisins de la même rue si le numéro exact ne
         # donne rien : une résidence peut couvrir plusieurs numéros sous une
@@ -2404,6 +2453,7 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
             "numero_recherche": target_numero,
             "numero_trouve": numero_trouve,
             "numero_approximatif": numero_trouve != target_numero,
+            "trouve_par_parcelle": trouve_par_parcelle,
         }
     except Exception as exc:
         print(f"[warn] BDNB échoué pour code_insee={code_insee} : {exc}")
