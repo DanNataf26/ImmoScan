@@ -1340,6 +1340,19 @@ def find_property_history(dept: str, address: str, lat: float, lon: float,
                 lambda r: haversine_m(lat, lon, r["latitude"], r["longitude"]), axis=1
             )
             proche = df2[df2["distance_m"] <= 30].copy()
+            if target_numero and "adresse_numero" in proche.columns:
+                # Un numéro DVF différent du numéro recherché, sur un point
+                # pourtant proche, désigne presque toujours un bâtiment
+                # voisin distinct (deux numéros consécutifs peuvent être à
+                # quelques mètres l'un de l'autre) — on l'exclut plutôt que
+                # de le faire passer pour une correspondance approximative
+                # de CETTE adresse précise. On ne garde que les lignes sans
+                # numéro renseigné (rare) ou dont le numéro correspond.
+                numero_proche_norm = (
+                    proche["adresse_numero"].fillna("").astype(str)
+                    .str.replace(r"\.0$", "", regex=True).str.lower()
+                )
+                proche = proche[(numero_proche_norm == "") | (numero_proche_norm == target_numero)]
             proche["correspondance"] = "Approximative (proximité < 30 m, adresse non confirmée)"
             if "vefa" in proche.columns:
                 proche["source"] = proche["vefa"].fillna(False).map({True: "DVF (VEFA)", False: "DVF (2021+)"})

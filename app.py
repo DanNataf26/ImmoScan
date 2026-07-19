@@ -748,6 +748,21 @@ with tab_recherche:
                         "besoin) — à distinguer des filtres d'affichage ci-dessous, "
                         "qui ne font que trier ce qui a déjà été trouvé."
                     )
+                    # Applique une éventuelle resynchronisation en attente (voir
+                    # plus bas) AVANT de créer les curseurs : une fois un widget
+                    # instancié, Streamlit interdit de réécrire sa clé d'état
+                    # dans la même exécution — d'où ce détour par une clé
+                    # intermédiaire, appliquée seulement au tout début du
+                    # prochain script.
+                    if "_pending_radius_sync" in st.session_state:
+                        st.session_state["radius_comparables_widget"] = (
+                            st.session_state.pop("_pending_radius_sync")
+                        )
+                    if "_pending_years_sync" in st.session_state:
+                        st.session_state["since_years_widget"] = (
+                            st.session_state.pop("_pending_years_sync")
+                        )
+
                     col_radius, col_years = st.columns(2)
                     with col_radius:
                         radius_comparables = st.slider(
@@ -819,15 +834,19 @@ with tab_recherche:
                 # Le curseur affiche la valeur DEMANDÉE, pas forcément celle
                 # réellement utilisée après élargissement automatique — sans
                 # ça, "Rayon" reste bloqué sur 100 m même quand la recherche
-                # a dû élargir à 250 m, ce qui est trompeur. On resynchronise
-                # les widgets sur la valeur effective, une seule fois (le
-                # test d'égalité empêche une boucle de rerun continue).
+                # a dû élargir à 250 m, ce qui est trompeur. On ne peut pas
+                # réécrire la clé d'un widget déjà instancié dans cette même
+                # exécution (Streamlit l'interdit) : on dépose donc la valeur
+                # cible dans une clé intermédiaire, appliquée au tout début
+                # du prochain passage, juste avant que les curseurs soient
+                # recréés (voir plus haut). Le test d'égalité empêche une
+                # boucle de rerun continue.
                 if (
                     radius_utilise != st.session_state.get("radius_comparables_widget")
                     or since_years_utilise != st.session_state.get("since_years_widget")
                 ):
-                    st.session_state["radius_comparables_widget"] = radius_utilise
-                    st.session_state["since_years_widget"] = since_years_utilise
+                    st.session_state["_pending_radius_sync"] = radius_utilise
+                    st.session_state["_pending_years_sync"] = since_years_utilise
                     st.rerun()
 
                 if type_local_recherche:
