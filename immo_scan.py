@@ -2028,6 +2028,7 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
         if not results:
             return None
 
+        candidats = []
         for r in results:
             adresses = list(r.get("l_libelle_adr") or [])
             if r.get("libelle_adr_principale_ban"):
@@ -2035,12 +2036,25 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
             for adr in adresses:
                 num, rue = _parse_address_number_street(adr)
                 if num == target_numero and all(t in rue for t in rue_tokens):
-                    return {
-                        "annee_construction": r.get("annee_construction"),
-                        "identifiant_bdnb": r.get("batiment_groupe_id"),
-                        "brut": r,  # gardé pour inspection/diagnostic si besoin
-                    }
-        return None
+                    candidats.append(r)
+                    break  # inutile de vérifier les autres adresses de CE bâtiment
+
+        if not candidats:
+            return None
+
+        # Plusieurs bâtiments peuvent revendiquer la même adresse texte (cas
+        # fréquent : un bâtiment d'angle la liste en adresse secondaire, en
+        # plus de sa propre adresse principale sur l'autre rue). Si le
+        # premier candidat trouvé n'a pas d'année renseignée mais qu'un
+        # AUTRE candidat correspondant en a une, celle-ci est plus utile à
+        # afficher — un `null` ne veut dire "aucune adresse ne correspond
+        # à une année connue" que si AUCUN candidat n'en a.
+        meilleur = next((c for c in candidats if c.get("annee_construction")), candidats[0])
+        return {
+            "annee_construction": meilleur.get("annee_construction"),
+            "identifiant_bdnb": meilleur.get("batiment_groupe_id"),
+            "brut": meilleur,  # gardé pour inspection/diagnostic si besoin
+        }
     except Exception as exc:
         print(f"[warn] BDNB échoué pour code_insee={code_insee} : {exc}")
         return None
