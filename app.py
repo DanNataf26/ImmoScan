@@ -1130,7 +1130,7 @@ with tab_recherche:
                     url_diag = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet"
                     params_diag = {
                         "code_commune_insee": f"eq.{geo['code_insee']}",
-                        "libelle_adr_principale_ban": f"ilike.*{target_numero}*{mot_pivot_diag}*",
+                        "libelle_adr_principale_ban": f"ilike.{target_numero}*{mot_pivot_diag}*",
                         "select": (
                             "batiment_groupe_id,annee_construction,"
                             "libelle_adr_principale_ban,l_libelle_adr,l_parcelle_id"
@@ -1140,7 +1140,7 @@ with tab_recherche:
                     st.write(f"URL : {url_diag}")
                     st.write(
                         f"Filtre : code_commune_insee=eq.{geo['code_insee']} "
-                        f"ET libelle_adr_principale_ban=ilike.*{target_numero}*{mot_pivot_diag}*"
+                        f"ET libelle_adr_principale_ban=ilike.{target_numero}*{mot_pivot_diag}*"
                     )
                     st.caption(
                         "10 résultats semble être un plafond serveur strict, quel "
@@ -1152,7 +1152,7 @@ with tab_recherche:
                     _rapport_bdnb += [
                         f"URL : {url_diag}",
                         f"Filtre : code_commune_insee=eq.{geo['code_insee']} "
-                        f"ET libelle_adr_principale_ban=ilike.*{target_numero}*{mot_pivot_diag}*",
+                        f"ET libelle_adr_principale_ban=ilike.{target_numero}*{mot_pivot_diag}*",
                     ]
                     try:
                         reponse_diag = _requests_diag.get(url_diag, params=params_diag, timeout=15)

@@ -1991,6 +1991,13 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
       (chacun avec les mêmes champs), y compris ceux non retenus comme
       "meilleur" — utile pour montrer les bâtiments voisins/liés plutôt que
       les ignorer silencieusement
+
+    Le numéro est ancré en DÉBUT de chaîne dans le filtre serveur
+    (`ilike.{numero}*...`, sans `*` de tête) plutôt qu'en recherche libre :
+    un numéro court comme "9" en recherche libre (`*9*`) matcherait aussi
+    "39", "19", "90"... et peut à lui seul épuiser le plafond de 10
+    résultats avec de faux positifs, noyant le vrai numéro recherché. Le
+    format BAN commence toujours par le numéro, donc l'ancrage est sûr.
     """
     import requests
 
@@ -2054,7 +2061,7 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
                 "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet",
                 params={
                     "code_commune_insee": f"eq.{code_insee}",
-                    "libelle_adr_principale_ban": f"ilike.*{target_numero}*{mot_pivot}*",
+                    "libelle_adr_principale_ban": f"ilike.{target_numero}*{mot_pivot}*",
                     "select": ",".join(CHAMPS_UTILES_BDNB),
                     "limit": 200,
                 },
