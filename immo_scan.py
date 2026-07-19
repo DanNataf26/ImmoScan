@@ -1998,6 +1998,16 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
     "39", "19", "90"... et peut à lui seul épuiser le plafond de 10
     résultats avec de faux positifs, noyant le vrai numéro recherché. Le
     format BAN commence toujours par le numéro, donc l'ancrage est sûr.
+
+    Si le numéro exact ne donne aucun résultat, un repli tente les numéros
+    voisins de la même rue (±2, ±4, ±6, ±8, ±10) : une résidence peut être
+    enregistrée sous une adresse BAN/BDNB principale couvrant plusieurs
+    numéros (constaté en conditions réelles : "Les Rives de Marne", 8 Quai
+    Bir-Hakeim à Saint-Maurice, va en réalité du n°2 au n°10 sous une même
+    entrée). Le résultat indique alors `numero_approximatif=True` et
+    `numero_trouve` différent de `numero_recherche` — à l'appelant de
+    l'afficher clairement comme approximatif plutôt que comme une
+    correspondance exacte.
     """
     import requests
 
@@ -2075,13 +2085,16 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
         if brut.lower() != p:
             pivots_a_essayer.append(brut)
 
-    try:
+    def _chercher_pour_numero(numero_a_chercher):
+        """Cherche un bâtiment pour un numéro précis sur cette rue, en
+        essayant chaque mot pivot (et sa forme accentuée) jusqu'à trouver
+        des candidats correspondants."""
         for mot_pivot in pivots_a_essayer:
             resp = requests.get(
                 "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet",
                 params={
                     "code_commune_insee": f"eq.{code_insee}",
-                    "libelle_adr_principale_ban": f"ilike.{target_numero}*{mot_pivot}*",
+                    "libelle_adr_principale_ban": f"ilike.{numero_a_chercher}*{mot_pivot}*",
                     "select": ",".join(CHAMPS_UTILES_BDNB),
                     "limit": 200,
                 },
@@ -2099,14 +2112,37 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
                     adresses.append(r["libelle_adr_principale_ban"])
                 for adr in adresses:
                     num, rue = _parse_address_number_street(adr)
-                    if num == target_numero and _tokens_correspondent(rue_tokens, rue):
+                    if num == numero_a_chercher and _tokens_correspondent(rue_tokens, rue):
                         candidats.append(r)
                         break  # inutile de vérifier les autres adresses de CE bâtiment
-
             if candidats:
-                break
-        else:
-            candidats = []
+                return candidats
+        return []
+
+    try:
+        candidats = _chercher_pour_numero(target_numero)
+        numero_trouve = target_numero
+
+        # Repli sur les numéros voisins de la même rue si le numéro exact ne
+        # donne rien : une résidence peut couvrir plusieurs numéros sous une
+        # seule adresse BAN/BDNB principale (constaté en conditions réelles :
+        # "Les Rives de Marne", 8 Quai Bir-Hakeim, Saint-Maurice, qui va en
+        # réalité du n°2 au n°10 sous une même entrée). On ne retourne alors
+        # PAS le numéro exact — le résultat est clairement signalé comme
+        # approximatif (voir `numero_approximatif` dans le retour), à
+        # l'appelant de décider s'il l'affiche et comment.
+        if not candidats and target_numero.isdigit():
+            n = int(target_numero)
+            for ecart in (2, 4, 6, 8, 10):
+                for essai in (n - ecart, n + ecart):
+                    if essai <= 0:
+                        continue
+                    candidats = _chercher_pour_numero(str(essai))
+                    if candidats:
+                        numero_trouve = str(essai)
+                        break
+                if candidats:
+                    break
 
         if not candidats:
             return None
@@ -2124,6 +2160,9 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
             "identifiant_bdnb": meilleur.get("batiment_groupe_id"),
             "brut": meilleur,  # gardé pour inspection/diagnostic si besoin
             "candidats": candidats,  # tous les bâtiments correspondants, meilleur inclus
+            "numero_recherche": target_numero,
+            "numero_trouve": numero_trouve,
+            "numero_approximatif": numero_trouve != target_numero,
         }
     except Exception as exc:
         print(f"[warn] BDNB échoué pour code_insee={code_insee} : {exc}")

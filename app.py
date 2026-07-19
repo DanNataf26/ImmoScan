@@ -1232,6 +1232,13 @@ with tab_recherche:
                 )
         else:
             b = batiment["brut"]
+            if batiment.get("numero_approximatif"):
+                st.warning(
+                    f"⚠️ Aucun bâtiment trouvé exactement au n°{batiment['numero_recherche']} "
+                    f"— résultat du n°{batiment['numero_trouve']} de la même rue à la place "
+                    "(numéro voisin non trouvé dans la BDNB, éventuellement la même "
+                    "résidence). À vérifier avant de s'y fier."
+                )
             st.metric("Année de construction estimée", batiment["annee_construction"])
             st.caption(
                 "Source : BDNB (Base de Données Nationale des Bâtiments, CSTB) — "
