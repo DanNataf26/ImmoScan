@@ -1966,22 +1966,27 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
     principalement pour l'année de construction, absente des données DVF.
 
     Confirmé en conditions réelles (millésime 2026-02.a, testé le
-    19/07/2026) : la table `batiment_groupe_complet` expose bien un champ
-    `annee_construction` — le nom de champ deviné initialement était le bon.
-    En revanche, l'ancien chemin `/bbox` documenté en 2024 n'existe plus
-    dans le schéma actuel (erreur PGRST202, fonction introuvable) — l'API a
-    changé de structure depuis. Par ailleurs sa géométrie (`geom_groupe`)
-    est en Lambert93 (EPSG:2154), pas en latitude/longitude WGS84 : une
-    recherche par proximité GPS directe n'est de toute façon pas possible
-    sans reprojection.
+    19/07/2026) :
+    - le champ `annee_construction` existe bien dans `batiment_groupe_complet`
+    - l'ancien chemin `/bbox` documenté en 2024 n'existe plus dans le schéma
+      actuel (erreur PGRST202) — l'API a changé de structure depuis
+    - sa géométrie (`geom_groupe`) est en Lambert93 (EPSG:2154), pas en
+      latitude/longitude WGS84 : une recherche par proximité GPS directe
+      n'est de toute façon pas possible sans reprojection
+    - un filtre par seule commune (`code_commune_insee=eq.X`) ne renvoie
+      qu'une dizaine de résultats quel que soit le `limit` demandé — la
+      commune entière de Maisons-Alfort (94046), qui compte des milliers de
+      bâtiments, n'en a renvoyé que 10 : plafond serveur silencieux,
+      indépendant du paramètre `limit`. Récupérer toute une commune puis
+      filtrer côté client ne fonctionne donc pas.
 
-    On identifie donc le bâtiment par correspondance d'adresse
-    (`libelle_adr_principale_ban` / `l_libelle_adr`), filtrée par commune
-    (`code_commune_insee`) pour limiter le volume de la requête à une seule
-    commune — même principe de correspondance numéro+rue que pour le DVF
-    (voir find_property_history), en plus tolérant (pas de filtrage des
-    mots de voie génériques) puisque c'est une donnée complémentaire, pas
-    l'identification principale du bien.
+    Le filtre est par conséquent poussé côté serveur : `code_commune_insee`
+    ET un `ilike` sur `libelle_adr_principale_ban` restreint au numéro de
+    rue recherché (les chiffres ne posent pas de problème d'accents,
+    contrairement au nom de rue) — ça réduit fortement le volume avant même
+    de recevoir la réponse. La correspondance fine (numéro exact + mots du
+    nom de rue) se fait ensuite côté client sur ce petit lot de résultats,
+    même principe que pour le DVF (voir find_property_history).
     """
     import requests
 
@@ -1999,11 +2004,12 @@ def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
             "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet",
             params={
                 "code_commune_insee": f"eq.{code_insee}",
+                "libelle_adr_principale_ban": f"ilike.*{target_numero}*",
                 "select": (
                     "batiment_groupe_id,annee_construction,"
                     "libelle_adr_principale_ban,l_libelle_adr,l_parcelle_id"
                 ),
-                "limit": 2000,
+                "limit": 200,
             },
             timeout=15,
         )

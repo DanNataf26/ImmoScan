@@ -1115,20 +1115,33 @@ with tab_recherche:
                     st.warning("Aucun code_insee disponible pour cette adresse — recherche impossible.")
                     _rapport_bdnb.append("Aucun code_insee disponible — recherche impossible.")
                 else:
+                    target_numero, target_rue = core._parse_address_number_street(geo["label"])
                     url_diag = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet"
                     params_diag = {
                         "code_commune_insee": f"eq.{geo['code_insee']}",
+                        "libelle_adr_principale_ban": f"ilike.*{target_numero}*",
                         "select": (
                             "batiment_groupe_id,annee_construction,"
                             "libelle_adr_principale_ban,l_libelle_adr,l_parcelle_id"
                         ),
-                        "limit": 2000,
+                        "limit": 200,
                     }
                     st.write(f"URL : {url_diag}")
-                    st.write(f"Filtre : code_commune_insee=eq.{geo['code_insee']}")
+                    st.write(
+                        f"Filtre : code_commune_insee=eq.{geo['code_insee']} "
+                        f"ET libelle_adr_principale_ban=ilike.*{target_numero}*"
+                    )
+                    st.caption(
+                        "Le filtre par commune seule plafonnait à ~10 résultats "
+                        "quel que soit le `limit` demandé (constaté sur Maisons-"
+                        "Alfort, qui compte pourtant des milliers de bâtiments) — "
+                        "le numéro de rue est donc filtré côté serveur en plus, "
+                        "pour rester sous ce plafond silencieux."
+                    )
                     _rapport_bdnb += [
                         f"URL : {url_diag}",
-                        f"Filtre : code_commune_insee=eq.{geo['code_insee']}",
+                        f"Filtre : code_commune_insee=eq.{geo['code_insee']} "
+                        f"ET libelle_adr_principale_ban=ilike.*{target_numero}*",
                     ]
                     try:
                         reponse_diag = _requests_diag.get(url_diag, params=params_diag, timeout=15)
@@ -1137,15 +1150,10 @@ with tab_recherche:
                         try:
                             data_diag = reponse_diag.json()
                             if isinstance(data_diag, list):
-                                st.write(f"Nombre de bâtiments renvoyés pour cette commune : {len(data_diag)}")
+                                st.write(f"Nombre de bâtiments renvoyés : {len(data_diag)}")
                                 _rapport_bdnb.append(
-                                    f"Nombre de bâtiments renvoyés pour cette commune : {len(data_diag)}"
+                                    f"Nombre de bâtiments renvoyés : {len(data_diag)}"
                                 )
-                                # On montre les adresses les plus proches en texte de
-                                # celle recherchée, pour voir pourquoi la correspondance
-                                # numéro+rue échoue le cas échéant (orthographe,
-                                # troncature, adresse absente de la BDNB, etc.).
-                                target_numero, target_rue = core._parse_address_number_street(geo["label"])
                                 st.write(f"Numéro/rue recherchés (normalisés) : {target_numero} / {target_rue}")
                                 _rapport_bdnb.append(
                                     f"Numéro/rue recherchés (normalisés) : {target_numero} / {target_rue}"
@@ -1156,20 +1164,17 @@ with tab_recherche:
                                     if r.get("libelle_adr_principale_ban"):
                                         adresses.append(r["libelle_adr_principale_ban"])
                                     for adr in adresses:
-                                        if target_numero and target_numero in adr:
-                                            echantillon.append({
-                                                "adresse_bdnb": adr,
-                                                "annee_construction": r.get("annee_construction"),
-                                            })
+                                        echantillon.append({
+                                            "adresse_bdnb": adr,
+                                            "annee_construction": r.get("annee_construction"),
+                                        })
                                 if echantillon:
                                     st.write(
-                                        f"Adresses de cette commune contenant le numéro "
-                                        f"'{target_numero}' (pour comparaison visuelle) :"
+                                        f"Adresses renvoyées par le filtre "
+                                        f"(pour comparaison visuelle) :"
                                     )
                                     st.json(echantillon[:20])
-                                    _rapport_bdnb.append(
-                                        f"Adresses contenant le numéro '{target_numero}' :"
-                                    )
+                                    _rapport_bdnb.append("Adresses renvoyées par le filtre :")
                                     _rapport_bdnb.append(
                                         _json_diag.dumps(echantillon[:20], ensure_ascii=False, indent=2)
                                     )
