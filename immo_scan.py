@@ -1959,52 +1959,74 @@ def interpret_dpe_classe(dpe: pd.DataFrame | None) -> dict | None:
 BDNB_API_URL = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet/bbox"
 
 
-def get_batiment_bdnb(lat: float, lon: float, radius_m: float = 40) -> dict | None:
+def get_batiment_bdnb(address: str, code_insee: str | None) -> dict | None:
     """
-    Récupère la carte d'identité du bâtiment le plus proche via l'API BDNB
-    (Base de Données Nationale des Bâtiments, CSTB) — gratuite, sans clé,
-    croise cadastre + BDTopo IGN + Fichiers fonciers. Utilisée ici
+    Récupère la carte d'identité du bâtiment via l'API BDNB (Base de Données
+    Nationale des Bâtiments, CSTB) — gratuite, sans clé. Utilisée ici
     principalement pour l'année de construction, absente des données DVF.
 
-    NB : cette intégration n'a pas pu être testée en conditions réelles au
-    moment de l'écriture (pas d'accès réseau dans l'environnement de
-    développement) — la logique suit la documentation publique de l'API
-    (protocole PostgREST), mais le nom exact des colonnes de la table
-    "complète" (100+ champs) n'a pas pu être vérifié précisément. Plusieurs
-    candidats sont essayés pour l'année de construction ; à ajuster si
-    besoin après un premier test réel.
-    """
-    import requests, math
+    Confirmé en conditions réelles (millésime 2026-02.a, testé le
+    19/07/2026) : la table `batiment_groupe_complet` expose bien un champ
+    `annee_construction` — le nom de champ deviné initialement était le bon.
+    En revanche, l'ancien chemin `/bbox` documenté en 2024 n'existe plus
+    dans le schéma actuel (erreur PGRST202, fonction introuvable) — l'API a
+    changé de structure depuis. Par ailleurs sa géométrie (`geom_groupe`)
+    est en Lambert93 (EPSG:2154), pas en latitude/longitude WGS84 : une
+    recherche par proximité GPS directe n'est de toute façon pas possible
+    sans reprojection.
 
-    d_lat = radius_m / 111_320
-    d_lon = radius_m / (111_320 * max(math.cos(math.radians(lat)), 0.1))
-    bbox = f"{lon - d_lon},{lat - d_lat},{lon + d_lon},{lat + d_lat}"
+    On identifie donc le bâtiment par correspondance d'adresse
+    (`libelle_adr_principale_ban` / `l_libelle_adr`), filtrée par commune
+    (`code_commune_insee`) pour limiter le volume de la requête à une seule
+    commune — même principe de correspondance numéro+rue que pour le DVF
+    (voir find_property_history), en plus tolérant (pas de filtrage des
+    mots de voie génériques) puisque c'est une donnée complémentaire, pas
+    l'identification principale du bien.
+    """
+    import requests
+
+    if not code_insee:
+        return None
+    target_numero, target_rue = _parse_address_number_street(address)
+    if not target_numero or not target_rue:
+        return None
+    rue_tokens = [t for t in target_rue.split() if len(t) > 2]
+    if not rue_tokens:
+        return None
 
     try:
-        resp = requests.get(BDNB_API_URL, params={"bbox": bbox}, timeout=10)
+        resp = requests.get(
+            "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet",
+            params={
+                "code_commune_insee": f"eq.{code_insee}",
+                "select": (
+                    "batiment_groupe_id,annee_construction,"
+                    "libelle_adr_principale_ban,l_libelle_adr,l_parcelle_id"
+                ),
+                "limit": 2000,
+            },
+            timeout=15,
+        )
         resp.raise_for_status()
         results = resp.json()
         if not results:
             return None
-        premier = results[0]
 
-        candidats_annee = [
-            "annee_construction", "date_construction", "annee_construction_estimation",
-            "millesime_annee_construction", "ffo_bat_annee_construction",
-        ]
-        annee = None
-        for col in candidats_annee:
-            if col in premier and premier[col]:
-                annee = premier[col]
-                break
-
-        return {
-            "annee_construction": annee,
-            "identifiant_bdnb": premier.get("batiment_groupe_id"),
-            "brut": premier,  # gardé pour inspection/diagnostic si besoin
-        }
+        for r in results:
+            adresses = list(r.get("l_libelle_adr") or [])
+            if r.get("libelle_adr_principale_ban"):
+                adresses.append(r["libelle_adr_principale_ban"])
+            for adr in adresses:
+                num, rue = _parse_address_number_street(adr)
+                if num == target_numero and all(t in rue for t in rue_tokens):
+                    return {
+                        "annee_construction": r.get("annee_construction"),
+                        "identifiant_bdnb": r.get("batiment_groupe_id"),
+                        "brut": r,  # gardé pour inspection/diagnostic si besoin
+                    }
+        return None
     except Exception as exc:
-        print(f"[warn] BDNB échoué pour ({lat}, {lon}) : {exc}")
+        print(f"[warn] BDNB échoué pour code_insee={code_insee} : {exc}")
         return None
 
 

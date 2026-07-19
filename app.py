@@ -1083,7 +1083,7 @@ with tab_recherche:
 
         st.subheader("Année de construction (BDNB)")
         with st.spinner("Recherche BDNB..."):
-            batiment = core.get_batiment_bdnb(geo["latitude"], geo["longitude"])
+            batiment = core.get_batiment_bdnb(geo["label"], geo.get("code_insee"))
         if batiment is None or not batiment.get("annee_construction"):
             st.caption(
                 "Année de construction non trouvée automatiquement pour ce "
@@ -1092,105 +1092,109 @@ with tab_recherche:
             )
             with st.expander("🔧 Diagnostic technique (BDNB)"):
                 st.caption(
-                    "Cette intégration n'a encore jamais été confirmée en "
-                    "conditions réelles — ce diagnostic sert à voir la vraie "
-                    "réponse de l'API plutôt que de continuer à deviner."
+                    "Le champ 'annee_construction' et l'ancienne méthode par "
+                    "bbox ont été vérifiés en conditions réelles le "
+                    "19/07/2026 (millésime 2026-02.a) : le champ existe bien, "
+                    "mais le chemin '/bbox' n'existe plus dans le schéma "
+                    "actuel, et sa géométrie est en Lambert93, pas en "
+                    "latitude/longitude. La recherche se fait donc "
+                    "maintenant par correspondance d'adresse — ce diagnostic "
+                    "sert à voir pourquoi ELLE échoue pour cette adresse "
+                    "précise, si c'est le cas."
                 )
                 import requests as _requests_diag
                 import json as _json_diag
-                import math as _math_diag
 
-                _rapport_bdnb = [f"Adresse : {geo['label']}", ""]
-
-                url_diag = core.BDNB_API_URL
-                d_lat = 40 / 111_320
-                d_lon = 40 / (111_320 * max(_math_diag.cos(_math_diag.radians(geo["latitude"])), 0.1))
-                bbox_diag = (
-                    f"{geo['longitude'] - d_lon},{geo['latitude'] - d_lat},"
-                    f"{geo['longitude'] + d_lon},{geo['latitude'] + d_lat}"
-                )
-                st.write(f"URL : {url_diag}")
-                st.write(f"Paramètre bbox : {bbox_diag}")
-                _rapport_bdnb += [
-                    "--- Essai 1 : endpoint /bbox ---",
-                    f"URL : {url_diag}",
-                    f"Paramètre bbox : {bbox_diag}",
+                _rapport_bdnb = [
+                    f"Adresse : {geo['label']}",
+                    f"code_insee : {geo.get('code_insee')}",
+                    "",
                 ]
-                try:
-                    reponse_diag = _requests_diag.get(
-                        url_diag, params={"bbox": bbox_diag}, timeout=15
-                    )
-                    st.write(f"Statut HTTP : {reponse_diag.status_code}")
-                    st.write(f"URL réellement appelée : {reponse_diag.url}")
-                    _rapport_bdnb += [
-                        f"Statut HTTP : {reponse_diag.status_code}",
-                        f"URL réellement appelée : {reponse_diag.url}",
-                    ]
-                    try:
-                        data_diag = reponse_diag.json()
-                        if isinstance(data_diag, list) and data_diag:
-                            st.write("Champs disponibles (premier résultat) :")
-                            st.code(sorted(data_diag[0].keys()))
-                            st.json(data_diag[0])
-                            _rapport_bdnb.append("Champs disponibles (premier résultat) :")
-                            _rapport_bdnb.append(str(sorted(data_diag[0].keys())))
-                            _rapport_bdnb.append(_json_diag.dumps(data_diag[0], ensure_ascii=False, indent=2))
-                        else:
-                            st.warning("Réponse vide ou de forme inattendue :")
-                            st.json(data_diag)
-                            _rapport_bdnb.append("Réponse vide ou de forme inattendue :")
-                            _rapport_bdnb.append(_json_diag.dumps(data_diag, ensure_ascii=False, indent=2))
-                    except ValueError:
-                        st.error("Réponse non-JSON :")
-                        st.code(reponse_diag.text[:2000])
-                        _rapport_bdnb.append("Réponse non-JSON :")
-                        _rapport_bdnb.append(reponse_diag.text[:2000])
-                except _requests_diag.exceptions.RequestException as e:
-                    st.error(f"Échec de l'appel réseau : {e}")
-                    _rapport_bdnb.append(f"Échec de l'appel réseau : {e}")
 
-                st.divider()
-                st.caption(
-                    "Second essai : le chemin '/bbox' semble ne plus exister "
-                    "dans le schéma actuel de l'API (l'erreur ci-dessus le "
-                    "confirme). On interroge ici la table de base "
-                    "directement, sans filtre géographique, juste pour voir "
-                    "les vrais noms de colonnes de ce millésime."
-                )
-                _rapport_bdnb += ["", "--- Essai 2 : table de base, sans filtre géographique ---"]
-                url_diag2 = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet"
-                try:
-                    reponse_diag2 = _requests_diag.get(
-                        url_diag2, params={"limit": 1}, timeout=15
-                    )
-                    st.write(f"Statut HTTP : {reponse_diag2.status_code}")
-                    st.write(f"URL réellement appelée : {reponse_diag2.url}")
+                if not geo.get("code_insee"):
+                    st.warning("Aucun code_insee disponible pour cette adresse — recherche impossible.")
+                    _rapport_bdnb.append("Aucun code_insee disponible — recherche impossible.")
+                else:
+                    url_diag = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet"
+                    params_diag = {
+                        "code_commune_insee": f"eq.{geo['code_insee']}",
+                        "select": (
+                            "batiment_groupe_id,annee_construction,"
+                            "libelle_adr_principale_ban,l_libelle_adr,l_parcelle_id"
+                        ),
+                        "limit": 2000,
+                    }
+                    st.write(f"URL : {url_diag}")
+                    st.write(f"Filtre : code_commune_insee=eq.{geo['code_insee']}")
                     _rapport_bdnb += [
-                        f"Statut HTTP : {reponse_diag2.status_code}",
-                        f"URL réellement appelée : {reponse_diag2.url}",
+                        f"URL : {url_diag}",
+                        f"Filtre : code_commune_insee=eq.{geo['code_insee']}",
                     ]
                     try:
-                        data_diag2 = reponse_diag2.json()
-                        if isinstance(data_diag2, list) and data_diag2:
-                            st.write("Champs disponibles (premier résultat) :")
-                            st.code(sorted(data_diag2[0].keys()))
-                            st.json(data_diag2[0])
-                            _rapport_bdnb.append("Champs disponibles (premier résultat) :")
-                            _rapport_bdnb.append(str(sorted(data_diag2[0].keys())))
-                            _rapport_bdnb.append(_json_diag.dumps(data_diag2[0], ensure_ascii=False, indent=2))
-                        else:
-                            st.warning("Réponse vide ou de forme inattendue :")
-                            st.json(data_diag2)
-                            _rapport_bdnb.append("Réponse vide ou de forme inattendue :")
-                            _rapport_bdnb.append(_json_diag.dumps(data_diag2, ensure_ascii=False, indent=2))
-                    except ValueError:
-                        st.error("Réponse non-JSON :")
-                        st.code(reponse_diag2.text[:2000])
-                        _rapport_bdnb.append("Réponse non-JSON :")
-                        _rapport_bdnb.append(reponse_diag2.text[:2000])
-                except _requests_diag.exceptions.RequestException as e:
-                    st.error(f"Échec de l'appel réseau : {e}")
-                    _rapport_bdnb.append(f"Échec de l'appel réseau : {e}")
+                        reponse_diag = _requests_diag.get(url_diag, params=params_diag, timeout=15)
+                        st.write(f"Statut HTTP : {reponse_diag.status_code}")
+                        _rapport_bdnb.append(f"Statut HTTP : {reponse_diag.status_code}")
+                        try:
+                            data_diag = reponse_diag.json()
+                            if isinstance(data_diag, list):
+                                st.write(f"Nombre de bâtiments renvoyés pour cette commune : {len(data_diag)}")
+                                _rapport_bdnb.append(
+                                    f"Nombre de bâtiments renvoyés pour cette commune : {len(data_diag)}"
+                                )
+                                # On montre les adresses les plus proches en texte de
+                                # celle recherchée, pour voir pourquoi la correspondance
+                                # numéro+rue échoue le cas échéant (orthographe,
+                                # troncature, adresse absente de la BDNB, etc.).
+                                target_numero, target_rue = core._parse_address_number_street(geo["label"])
+                                st.write(f"Numéro/rue recherchés (normalisés) : {target_numero} / {target_rue}")
+                                _rapport_bdnb.append(
+                                    f"Numéro/rue recherchés (normalisés) : {target_numero} / {target_rue}"
+                                )
+                                echantillon = []
+                                for r in data_diag:
+                                    adresses = list(r.get("l_libelle_adr") or [])
+                                    if r.get("libelle_adr_principale_ban"):
+                                        adresses.append(r["libelle_adr_principale_ban"])
+                                    for adr in adresses:
+                                        if target_numero and target_numero in adr:
+                                            echantillon.append({
+                                                "adresse_bdnb": adr,
+                                                "annee_construction": r.get("annee_construction"),
+                                            })
+                                if echantillon:
+                                    st.write(
+                                        f"Adresses de cette commune contenant le numéro "
+                                        f"'{target_numero}' (pour comparaison visuelle) :"
+                                    )
+                                    st.json(echantillon[:20])
+                                    _rapport_bdnb.append(
+                                        f"Adresses contenant le numéro '{target_numero}' :"
+                                    )
+                                    _rapport_bdnb.append(
+                                        _json_diag.dumps(echantillon[:20], ensure_ascii=False, indent=2)
+                                    )
+                                else:
+                                    st.warning(
+                                        f"Aucune adresse de cette commune ne contient le "
+                                        f"numéro '{target_numero}' — le bâtiment n'est "
+                                        "probablement pas dans la BDNB pour cette adresse."
+                                    )
+                                    _rapport_bdnb.append(
+                                        f"Aucune adresse ne contient le numéro '{target_numero}'."
+                                    )
+                            else:
+                                st.warning("Réponse de forme inattendue :")
+                                st.json(data_diag)
+                                _rapport_bdnb.append("Réponse de forme inattendue :")
+                                _rapport_bdnb.append(_json_diag.dumps(data_diag, ensure_ascii=False, indent=2))
+                        except ValueError:
+                            st.error("Réponse non-JSON :")
+                            st.code(reponse_diag.text[:2000])
+                            _rapport_bdnb.append("Réponse non-JSON :")
+                            _rapport_bdnb.append(reponse_diag.text[:2000])
+                    except _requests_diag.exceptions.RequestException as e:
+                        st.error(f"Échec de l'appel réseau : {e}")
+                        _rapport_bdnb.append(f"Échec de l'appel réseau : {e}")
 
                 st.divider()
                 st.markdown("**📋 Copier ce diagnostic**")
