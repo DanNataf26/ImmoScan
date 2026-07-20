@@ -1643,6 +1643,45 @@ with tab_recherche:
                         })
                     st.dataframe(pd.DataFrame(lignes_autres), use_container_width=True)
 
+        st.subheader("Permis d'urbanisme connus (Sitadel)")
+        if not known_parcelle_ids:
+            st.caption(
+                "Aucune parcelle cadastrale confirmée pour cette adresse — "
+                "recherche impossible sans elle (voir 'Historique probable' "
+                "ci-dessus)."
+            )
+        else:
+            with st.spinner("Recherche Sitadel (permis de construire/démolir)..."):
+                permis = core.find_permis_urbanisme(
+                    known_parcelle_ids["code_insee"],
+                    known_parcelle_ids["section"],
+                    known_parcelle_ids["numero"],
+                )
+            if permis is None or permis.empty:
+                st.caption(
+                    "Aucun permis de construire, d'aménager, de démolir ou "
+                    "déclaration préalable connu pour cette parcelle depuis "
+                    "2013 (données Sitadel, SDES)."
+                )
+            else:
+                colonnes_utiles = [
+                    c for c in [
+                        "categorie_sitadel", "TYPE_DAU", "DATE_REELLE_AUTORISATION",
+                        "DATE_REELLE_DOC", "DATE_REELLE_DAACT", "NB_LGT_TOT_CREES",
+                        "NB_LGT_DEMOLIS", "SURF_HAB_CREEE", "SURF_HAB_DEMOLIE",
+                        "SURF_LOC_CREEE", "SURF_LOC_DEMOLIE",
+                    ] if c in permis.columns
+                ]
+                autres_col = [c for c in permis.columns if c not in colonnes_utiles]
+                st.dataframe(permis[colonnes_utiles + autres_col], use_container_width=True)
+                st.caption(
+                    "Source : Sitadel (SDES), via l'API publique DiDo — "
+                    "TYPE_DAU : PC = permis de construire, DP = déclaration "
+                    "préalable, PA = permis d'aménager, PD = permis de "
+                    "démolir. Correspondance par parcelle cadastrale exacte "
+                    "(fiable), pas par adresse."
+                )
+
         if suggested_surface and suggested_type:
             st.caption(
                 "💡 Surface et type trouvés via une vente exacte de ce bien : "

@@ -2200,6 +2200,68 @@ def construire_tableau_dpe(dpe: pd.DataFrame | None) -> tuple[pd.DataFrame | Non
 BDNB_API_URL = "https://api.bdnb.io/v1/bdnb/donnees/batiment_groupe_complet/bbox"
 
 
+DIDO_API_BASE = "https://data.statistiques.developpement-durable.gouv.fr/dido/api/v1"
+SITADEL_RID_LOGEMENTS = "8b35affb-55fc-4c1f-915b-7750f974446a"
+SITADEL_RID_LOCAUX = "f8f0700f-806c-40a7-83b1-f21cf507e7c4"
+
+
+def find_permis_urbanisme(code_insee: str, section: str, numero_parcelle: str) -> pd.DataFrame | None:
+    """
+    Cherche les permis de construire/démolir/aménager et déclarations
+    préalables (base Sitadel, TYPE_DAU parmi PC/DP/PA/PD) connus pour une
+    parcelle cadastrale précise, via l'API publique DiDo du SDES (gratuite,
+    sans authentification — confirmée en conditions réelles le 20/07/2026).
+
+    Contrairement au DVF/BDNB, ici la recherche se fait DIRECTEMENT par
+    section + numéro de parcelle cadastrale (`SEC_CADASTRE1`/`NUM_CADASTRE1`,
+    filtre `eq` confirmé disponible) — pas de recherche par texte d'adresse
+    à corriger pour les abréviations ou les accents, la parcelle suffit.
+    Réutilise `known_parcelle_ids` (déjà calculé de façon fiable via le DVF
+    exact — voir find_property_history) sans nouvelle logique de correspondance.
+
+    Interroge les deux jeux de données qui couvrent, à eux deux, tous les
+    types de permis (les PC/DP/PA/PD ne sont PAS des fichiers séparés, ils
+    sont distingués par la colonne TYPE_DAU au sein de ces deux fichiers) :
+    - permis créant des logements (rid SITADEL_RID_LOGEMENTS)
+    - permis créant des locaux non résidentiels (rid SITADEL_RID_LOCAUX)
+
+    Ne précise pas de `millesime` dans l'URL : la doc DiDo confirme que le
+    dernier millésime disponible est utilisé par défaut, donc toujours à
+    jour sans avoir à gérer un cycle de rafraîchissement nous-mêmes.
+    """
+    import requests
+
+    resultats = []
+    for rid, categorie in [
+        (SITADEL_RID_LOGEMENTS, "Logements"),
+        (SITADEL_RID_LOCAUX, "Locaux non résidentiels"),
+    ]:
+        try:
+            resp = requests.get(
+                f"{DIDO_API_BASE}/datafiles/{rid}/json",
+                params={
+                    "COMM": f"eq:{code_insee}",
+                    "SEC_CADASTRE1": f"eq:{section}",
+                    "NUM_CADASTRE1": f"eq:{numero_parcelle}",
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            lignes = data.get("data", data) if isinstance(data, dict) else data
+            if isinstance(lignes, list) and lignes:
+                for ligne in lignes:
+                    ligne["categorie_sitadel"] = categorie
+                resultats.extend(lignes)
+        except Exception as exc:
+            print(f"[warn] Sitadel ({categorie}) échoué pour {code_insee}/{section}/{numero_parcelle} : {exc}")
+            continue
+
+    if not resultats:
+        return None
+    return pd.json_normalize(resultats)
+
+
 def get_batiment_bdnb(
     address: str, code_insee: str | None, id_parcelle_connue: str | None = None,
 ) -> dict | None:
