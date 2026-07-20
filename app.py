@@ -427,7 +427,13 @@ with st.sidebar.expander("🧪 Test API Sitadel (DiDo / SDES)"):
                 resultats = data.get("data", data) if isinstance(data, dict) else data
                 if isinstance(resultats, list) and resultats:
                     st.success(f"{len(resultats)} jeu(x) de données trouvé(s).")
-                    st.dataframe(pd.DataFrame(resultats), use_container_width=True)
+                    # st.json (pas st.dataframe) : la réponse contient des
+                    # structures imbriquées (colonnes = liste de dicts par
+                    # millésime) que pd.DataFrame()/Arrow ne sait pas
+                    # sérialiser proprement pour un tableau — ça faisait
+                    # planter l'affichage et l'erreur était à tort étiquetée
+                    # "réponse non-JSON" alors que le JSON était valide.
+                    st.json(resultats)
                     _rapport_sitadel.append(f"{len(resultats)} résultat(s) :")
                     _rapport_sitadel.append(
                         _json_diag_sitadel.dumps(resultats, ensure_ascii=False, indent=2)
@@ -437,11 +443,11 @@ with st.sidebar.expander("🧪 Test API Sitadel (DiDo / SDES)"):
                     st.json(data)
                     _rapport_sitadel.append("Aucun résultat / forme inattendue :")
                     _rapport_sitadel.append(_json_diag_sitadel.dumps(data, ensure_ascii=False, indent=2))
-            except ValueError:
-                st.error("Réponse non-JSON :")
-                st.code(reponse.text[:2000])
-                _rapport_sitadel.append("Réponse non-JSON :")
-                _rapport_sitadel.append(reponse.text[:2000])
+            except Exception as e:
+                st.error(f"Erreur de traitement de la réponse ({type(e).__name__}) : {e}")
+                st.code(reponse.text[:3000])
+                _rapport_sitadel.append(f"Erreur de traitement ({type(e).__name__}) : {e}")
+                _rapport_sitadel.append(reponse.text[:3000])
         except _requests_diag_sitadel.exceptions.RequestException as e:
             st.error(f"Échec de l'appel réseau : {e}")
             _rapport_sitadel.append(f"Échec de l'appel réseau : {e}")
@@ -493,11 +499,11 @@ with st.sidebar.expander("🧪 Test API Sitadel (DiDo / SDES)"):
                         _rapport_sitadel.append(
                             _json_diag_sitadel.dumps(data_donnees, ensure_ascii=False, indent=2)
                         )
-                except ValueError:
-                    st.error("Réponse non-JSON (données) :")
-                    st.code(reponse_donnees.text[:2000])
-                    _rapport_sitadel.append("Réponse non-JSON (données) :")
-                    _rapport_sitadel.append(reponse_donnees.text[:2000])
+                except Exception as e:
+                    st.error(f"Erreur de traitement de la réponse ({type(e).__name__}) : {e}")
+                    st.code(reponse_donnees.text[:3000])
+                    _rapport_sitadel.append(f"Erreur de traitement ({type(e).__name__}) : {e}")
+                    _rapport_sitadel.append(reponse_donnees.text[:3000])
             except _requests_diag_sitadel.exceptions.RequestException as e:
                 st.error(f"Échec de l'appel réseau : {e}")
                 _rapport_sitadel.append(f"Échec de l'appel réseau : {e}")
@@ -1358,7 +1364,7 @@ with tab_recherche:
                         return f"background-color: {couleur}; color: white; font-weight: bold; text-align: center;"
                     return ""
                 st.dataframe(
-                    tableau_dpe.style.applymap(_style_dpe, subset=[col_energie]),
+                    tableau_dpe.style.map(_style_dpe, subset=[col_energie]),
                     use_container_width=True,
                 )
             else:
