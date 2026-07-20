@@ -2239,38 +2239,69 @@ def find_permis_urbanisme(code_insee: str, section: str, numero_parcelle: str) -
     le SDES lui-même — leur présence dans cette source n'est donc pas
     garantie même quand ils existent réellement. Une absence de résultat ne
     doit jamais être présentée comme une absence réelle de permis.
+
+    AUTRE LIMITE CONFIRMÉE, avec impact concret constaté (1 Impasse
+    Blanchard, Créteil — immeuble neuf de 40 logements, aucun permis
+    retrouvé par parcelle exacte) : "les parcelles renseignées peuvent
+    correspondre à d'anciennes parcelles aujourd'hui disparues (division
+    par exemple...)" (SDSIG). Pour une construction neuve, le permis est
+    déposé AVANT le chantier, sur la parcelle telle qu'elle existait alors
+    — qui peut être redécoupée après construction, avant la vente qui nous
+    donne la parcelle actuelle via le DVF. La recherche essaie donc, dans
+    l'ordre : la parcelle exacte sur chacun des 3 emplacements possibles
+    (un dossier Sitadel référence 1 à 3 parcelles), puis, si rien ne
+    correspond, TOUTE LA SECTION cadastrale (sans le numéro), pour capter
+    un ancien découpage — ces résultats élargis sont signalés comme
+    approximatifs (colonne `correspondance_approximative`), jamais présentés
+    comme une correspondance certaine.
     """
     import requests
 
-    resultats = []
-    for rid, categorie in [
-        (SITADEL_RID_LOGEMENTS, "Logements"),
-        (SITADEL_RID_LOCAUX, "Locaux non résidentiels"),
-    ]:
-        try:
-            resp = requests.get(
-                f"{DIDO_API_BASE}/datafiles/{rid}/json",
-                params={
-                    "COMM": f"eq:{code_insee}",
-                    "SEC_CADASTRE1": f"eq:{section}",
-                    "NUM_CADASTRE1": f"eq:{numero_parcelle}",
-                },
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            lignes = data.get("data", data) if isinstance(data, dict) else data
-            if isinstance(lignes, list) and lignes:
-                for ligne in lignes:
-                    ligne["categorie_sitadel"] = categorie
-                resultats.extend(lignes)
-        except Exception as exc:
-            print(f"[warn] Sitadel ({categorie}) échoué pour {code_insee}/{section}/{numero_parcelle} : {exc}")
-            continue
+    def _interroger(params_supplementaires):
+        resultats_partiels = []
+        for rid, categorie in [
+            (SITADEL_RID_LOGEMENTS, "Logements"),
+            (SITADEL_RID_LOCAUX, "Locaux non résidentiels"),
+        ]:
+            try:
+                resp = requests.get(
+                    f"{DIDO_API_BASE}/datafiles/{rid}/json",
+                    params={"COMM": f"eq:{code_insee}", **params_supplementaires},
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                lignes = data.get("data", data) if isinstance(data, dict) else data
+                if isinstance(lignes, list) and lignes:
+                    for ligne in lignes:
+                        ligne["categorie_sitadel"] = categorie
+                    resultats_partiels.extend(lignes)
+            except Exception as exc:
+                print(f"[warn] Sitadel ({categorie}) échoué pour {code_insee} : {exc}")
+                continue
+        return resultats_partiels
 
-    if not resultats:
-        return None
-    return pd.json_normalize(resultats)
+    # 1. Parcelle exacte, sur chacun des 3 emplacements possibles (un
+    # dossier Sitadel peut référencer jusqu'à 3 parcelles).
+    for n in (1, 2, 3):
+        resultats = _interroger({
+            f"SEC_CADASTRE{n}": f"eq:{section}",
+            f"NUM_CADASTRE{n}": f"eq:{numero_parcelle}",
+        })
+        if resultats:
+            for r in resultats:
+                r["correspondance_approximative"] = False
+            return pd.json_normalize(resultats)
+
+    # 2. Repli : toute la section cadastrale (numéro non garanti stable en
+    # cas de redécoupage) — signalé comme approximatif, jamais silencieux.
+    resultats = _interroger({"SEC_CADASTRE1": f"eq:{section}"})
+    if resultats:
+        for r in resultats:
+            r["correspondance_approximative"] = True
+        return pd.json_normalize(resultats)
+
+    return None
 
 
 def get_batiment_bdnb(

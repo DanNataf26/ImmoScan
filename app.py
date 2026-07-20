@@ -1669,15 +1669,32 @@ with tab_recherche:
                     "les projets sans création de surface."
                 )
             else:
+                est_approximatif = (
+                    "correspondance_approximative" in permis.columns
+                    and bool(permis["correspondance_approximative"].iloc[0])
+                )
+                if est_approximatif:
+                    st.warning(
+                        "⚠️ Aucun permis trouvé sur cette parcelle exacte — "
+                        "résultats de toute la section cadastrale à la place "
+                        "(le numéro de parcelle a pu changer, ex. suite à un "
+                        "redécoupage lors d'une construction neuve). À "
+                        "vérifier manuellement : ces permis peuvent concerner "
+                        "une parcelle voisine, pas celle-ci précisément."
+                    )
                 colonnes_utiles = [
                     c for c in [
-                        "categorie_sitadel", "TYPE_DAU", "DATE_REELLE_AUTORISATION",
+                        "categorie_sitadel", "TYPE_DAU", "SEC_CADASTRE1", "NUM_CADASTRE1",
+                        "DATE_REELLE_AUTORISATION",
                         "DATE_REELLE_DOC", "DATE_REELLE_DAACT", "NB_LGT_TOT_CREES",
                         "NB_LGT_DEMOLIS", "SURF_HAB_CREEE", "SURF_HAB_DEMOLIE",
                         "SURF_LOC_CREEE", "SURF_LOC_DEMOLIE",
                     ] if c in permis.columns
                 ]
-                autres_col = [c for c in permis.columns if c not in colonnes_utiles]
+                autres_col = [
+                    c for c in permis.columns
+                    if c not in colonnes_utiles and c != "correspondance_approximative"
+                ]
                 st.dataframe(permis[colonnes_utiles + autres_col], use_container_width=True)
                 st.caption(
                     "Source : Sitadel (SDES), via l'API publique DiDo — "
