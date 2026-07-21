@@ -2248,7 +2248,7 @@ def find_ecoles_proches(
                 ),
                 "limit": 100,
             },
-            timeout=15,
+            timeout=8,
         )
         resp.raise_for_status()
         records = resp.json().get("results", [])
@@ -2337,7 +2337,7 @@ def find_permis_urbanisme(code_insee: str, section: str, numero_parcelle: str) -
                 resp = requests.get(
                     f"{DIDO_API_BASE}/datafiles/{rid}/json",
                     params={"COMM": f"eq:{code_insee}", **params_supplementaires},
-                    timeout=15,
+                    timeout=8,
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -2531,7 +2531,7 @@ def get_batiment_bdnb(
                     "select": ",".join(CHAMPS_UTILES_BDNB),
                     "limit": 200,
                 },
-                timeout=15,
+                timeout=8,
             )
             resp.raise_for_status()
             results = resp.json()
@@ -2572,7 +2572,7 @@ def get_batiment_bdnb(
                         "select": ",".join(CHAMPS_UTILES_BDNB),
                         "limit": 200,
                     },
-                    timeout=15,
+                    timeout=8,
                 )
                 resp_parcelle.raise_for_status()
                 candidats_parcelle = resp_parcelle.json()

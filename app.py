@@ -71,6 +71,35 @@ def load_reference(dept: str):
     return ref, trend
 
 
+# Les 4 fonctions ci-dessous appellent des API externes en direct
+# (BDNB, Sitadel, ADEME, Annuaire éducation) — jusqu'à 45+ secondes cumulées
+# dans le pire des cas (Sitadel seul peut faire jusqu'à 8 requêtes
+# séquentielles). Sans cache, Streamlit les relançait à CHAQUE interaction
+# sur la page (cocher une case, bouger un curseur...), pas seulement à un
+# changement d'adresse, d'où une lenteur perçue à chaque clic plutôt qu'une
+# seule fois par recherche. Mise en cache 6h (ttl) : ces données changent
+# rarement d'une minute à l'autre, et une durée de vie limitée évite un
+# cache figé indéfiniment sur toute la durée de vie du conteneur.
+@st.cache_data(show_spinner=False, ttl=3600 * 6)
+def cached_find_ecoles_proches(lat: float, lon: float, code_postal):
+    return core.find_ecoles_proches(lat, lon, code_postal)
+
+
+@st.cache_data(show_spinner=False, ttl=3600 * 6)
+def cached_find_dpe(label: str, code_postal):
+    return core.find_dpe(label, code_postal)
+
+
+@st.cache_data(show_spinner=False, ttl=3600 * 6)
+def cached_get_batiment_bdnb(label: str, code_insee, id_parcelle):
+    return core.get_batiment_bdnb(label, code_insee, id_parcelle)
+
+
+@st.cache_data(show_spinner=False, ttl=3600 * 6)
+def cached_find_permis_urbanisme(code_insee: str, section: str, numero: str):
+    return core.find_permis_urbanisme(code_insee, section, numero)
+
+
 def reference_exists(dept: str) -> bool:
     return (core.OUTPUT_DIR / f"reference_{dept}.csv").exists()
 
@@ -1249,7 +1278,7 @@ with tab_recherche:
 
         st.subheader("Écoles à proximité")
         with st.spinner("Recherche des établissements scolaires..."):
-            ecoles = core.find_ecoles_proches(
+            ecoles = cached_find_ecoles_proches(
                 geo["latitude"], geo["longitude"], geo.get("code_postal"),
             )
         if ecoles is None or ecoles.empty:
@@ -1299,7 +1328,7 @@ with tab_recherche:
         # --- DPE -----------------------------------------------------------
         st.subheader("DPE enregistré à cette adresse")
         with st.spinner("Recherche DPE ADEME..."):
-            dpe = core.find_dpe(geo["label"], geo.get("code_postal"))
+            dpe = cached_find_dpe(geo["label"], geo.get("code_postal"))
         type_bien_pour_dpe = st.session_state.get("types_bien_selection", [])
         type_bien_pour_dpe = type_bien_pour_dpe[0] if len(type_bien_pour_dpe) == 1 else None
         # Une surface issue d'une ligne "Immeuble (vente en bloc, estimé)"
@@ -1441,7 +1470,7 @@ with tab_recherche:
                     known_parcelle_ids["code_insee"] + known_parcelle_ids["prefixe"]
                     + known_parcelle_ids["section"] + known_parcelle_ids["numero"]
                 )
-            batiment = core.get_batiment_bdnb(
+            batiment = cached_get_batiment_bdnb(
                 geo["label"], geo.get("code_insee"), id_parcelle_pour_bdnb,
             )
         if batiment is None or not batiment.get("annee_construction"):
@@ -1708,7 +1737,7 @@ with tab_recherche:
             )
         else:
             with st.spinner("Recherche Sitadel (permis de construire/démolir)..."):
-                permis = core.find_permis_urbanisme(
+                permis = cached_find_permis_urbanisme(
                     known_parcelle_ids["code_insee"],
                     known_parcelle_ids["section"],
                     known_parcelle_ids["numero"],
